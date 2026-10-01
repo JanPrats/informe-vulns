@@ -163,14 +163,21 @@ def obtener_cves(desde, hasta, api_key, ruta_cache):
     fmt = "%Y-%m-%dT%H:%M:%S%z"
     if cache and cache.get("v") != VERSION_CACHE:
         cache = None
-    if cache and datetime.strptime(cache["desde"], fmt) <= desde:
+    if cache:
+        cves = {c["id"]: c for c in cache["cves"]}
+        desde_cache = datetime.strptime(cache["desde"], fmt)
+        # Si se pide más atrás de lo que cubre la caché, solo se descarga el tramo que falta
+        if desde < desde_cache:
+            print(f"Caché desde {desde_cache:%Y-%m-%d}; descargando el tramo anterior desde {desde:%Y-%m-%d}…", file=sys.stderr)
+            for c in descargar_nvd(desde, desde_cache, api_key):
+                cves.setdefault(c["id"], c)
+            desde_cache = desde
+            time.sleep(0.7 if api_key else 6.5)
         # 6 h de solape para recoger CVEs que NVD indexa con retraso
         inicio = datetime.strptime(cache["hasta"], fmt) - timedelta(hours=6)
         print(f"Caché encontrada; descargando solo lo publicado desde {inicio:%Y-%m-%d %H:%M} UTC…", file=sys.stderr)
-        cves = {c["id"]: c for c in cache["cves"]}
         for c in descargar_nvd(max(inicio, desde), hasta, api_key):
             cves[c["id"]] = c
-        desde_cache = datetime.strptime(cache["desde"], fmt)
     else:
         cves = {c["id"]: c for c in descargar_nvd(desde, hasta, api_key)}
         desde_cache = desde
@@ -434,6 +441,11 @@ def descargar_cna(ids, ruta_cache):
     return cache
 
 
+def _producto_valido(nombre):
+    """Algunos fabricantes ponen 'n/a' o similar como nombre de producto en CVE.org."""
+    return bool(nombre) and nombre.strip().lower() not in ("n/a", "na", "unknown", "unspecified", "*", "-")
+
+
 def enriquecer(res, cves_por_id, ruta_cache):
     cna = descargar_cna([r["cve"] for r in res], ruta_cache)
     for r in res:
@@ -441,11 +453,14 @@ def enriquecer(res, cves_por_id, ruta_cache):
         cve = cves_por_id[r["cve"]]
         r["requisitos"], r["resumen_explotacion"] = requisitos(r["vector"])
         r["versiones"] = _lineas_versiones(c.get("affected")) or _versiones_nvd(cve)
-        productos = list(dict.fromkeys(a.get("product", "") for a in c.get("affected", []) if a.get("product")))
+        productos = list(dict.fromkeys(a["product"] for a in c.get("affected", []) if _producto_valido(a.get("product"))))
         if not productos:
             productos = list(dict.fromkeys(p.split(":")[4].replace("_", " ").title()
                                            for p in cpes(cve) if p.count(":") > 4))
-        r["producto"] = ", ".join(productos) or "General"
+        r["producto"] = ", ".join(productos) or "Producto no especificado"
+        for v in r["versiones"]:
+            if not _producto_valido(v["producto"].split(" (")[0]):
+                v["producto"] = r["producto"]
         r["condiciones"] = _textos(c.get("configurations"))
         r["solucion"] = _textos(c.get("solutions")) + [f"Mitigación: {t}" for t in _textos(c.get("workarounds"))]
         refs = c.get("references") or [x["url"] for x in cve.get("references", [])]
@@ -493,125 +508,224 @@ PLANTILLA_HTML = r"""<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Informe Vulnerabilidades</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
+/* Concepto: dossier de avisos de seguridad. Cada fabricante es un capítulo: el nombre en serif a la
+   izquierda (fijo al hacer scroll) y sus CVEs a la derecha, separados por líneas finas. El color se
+   reserva para la severidad y la explotación activa. Tema claro siempre; el oscuro solo con el botón. */
 :root{
-  --bg:#fbfbfa; --fg:#18181b; --muted:#71717a; --faint:#a1a1aa; --line:#e7e7e4; --soft:#f3f3f1; --link:#2952cc;
-  --crit:#7e22ce; --high:#dc2626; --med:#c2410c; --low:#15803d; --none:#71717a; --ok:#15803d; --kev:#dc2626;
+  --paper:#f7f8fa; --sheet:#ffffff; --ink:#111827; --text:#374151; --muted:#6b7280; --faint:#9ca3af;
+  --rule:#e5e7eb; --rule-strong:#d1d5db; --wash:#f3f4f6; --accent:#1e3a8a;
+  --crit:#86198f; --high:#c2410c; --med:#a16207; --low:#3f6212; --none:#6b7280;
+  --exploit:#dc2626; --exploit-wash:#fef2f2; --fix:#047857; --fix-wash:#ecfdf5;
+  --f-display:"Instrument Serif",Georgia,"Times New Roman",serif;
+  --f-body:"Geist",system-ui,-apple-system,"Segoe UI",sans-serif;
+  color-scheme:light;
 }
-@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
-  --bg:#111113; --fg:#ececee; --muted:#9d9da6; --faint:#6b6b73; --line:#26262b; --soft:#1a1a1e; --link:#8ab4ff;
-  --crit:#c084fc; --high:#f87171; --med:#fb923c; --low:#4ade80; --none:#9d9da6; --ok:#4ade80; --kev:#f87171;
-}}
 :root[data-theme="dark"]{
-  --bg:#111113; --fg:#ececee; --muted:#9d9da6; --faint:#6b6b73; --line:#26262b; --soft:#1a1a1e; --link:#8ab4ff;
-  --crit:#c084fc; --high:#f87171; --med:#fb923c; --low:#4ade80; --none:#9d9da6; --ok:#4ade80; --kev:#f87171;
+  --paper:#0d1017; --sheet:#121620; --ink:#f3f4f6; --text:#d1d5db; --muted:#9ca3af; --faint:#6b7280;
+  --rule:#232937; --rule-strong:#323a4b; --wash:#171c27; --accent:#93b4ff;
+  --crit:#e879f9; --high:#fb923c; --med:#facc15; --low:#a3e635; --none:#9ca3af;
+  --exploit:#f87171; --exploit-wash:#2a1416; --fix:#34d399; --fix-wash:#0f2a21;
+  color-scheme:dark;
 }
 *{box-sizing:border-box}
+[hidden]{display:none!important}
 html,body{margin:0}
-body{background:var(--bg);color:var(--fg);font:15px/1.6 Inter,system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
-.mono,code{font-family:"JetBrains Mono",ui-monospace,Consolas,monospace;font-size:.92em}
-a{color:var(--link);text-decoration:none} a:hover{text-decoration:underline}
-.wrap{max-width:920px;margin:0 auto;padding:56px 16px 80px}
+html{scroll-behavior:smooth}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}*{animation:none!important;transition:none!important}}
+body{background:var(--paper);color:var(--text);font:15px/1.6 var(--f-body);-webkit-font-smoothing:antialiased;font-feature-settings:"ss01"}
+.wrap{max-width:1180px;margin:0 auto;padding-inline:clamp(16px,4vw,48px)}
+a{color:inherit}
+svg.i{width:15px;height:15px;flex:none;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+.mono{font-variant-numeric:tabular-nums}
 
-/* cabecera */
-header h1{font-size:28px;font-weight:700;letter-spacing:-.02em;margin:0}
-header .sub{color:var(--muted);margin:4px 0 0}
-.index{display:flex;flex-wrap:wrap;gap:6px 20px;margin:24px 0 0;padding-top:20px;border-top:1px solid var(--line);font-size:14px}
-.index a{color:var(--fg)} .index a span{color:var(--faint);margin-left:4px}
+/* ---------- cabecera ---------- */
+.masthead{padding-block:56px 0}
+.mrow{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}
+.kicker{font:500 11.5px/1 var(--f-body);letter-spacing:.14em;text-transform:uppercase;color:var(--muted);display:flex;gap:14px;flex-wrap:wrap}
+.kicker b{color:var(--ink);font-weight:500}
+h1{font:400 clamp(44px,7vw,84px)/.95 var(--f-display);letter-spacing:-.02em;color:var(--ink);margin:22px 0 0;text-wrap:balance}
+h1 em{font-style:italic;color:var(--muted)}
+.meta-r{display:flex;align-items:center;gap:10px}
+.status{display:inline-flex;align-items:center;gap:8px;font:500 12px/1 var(--f-body);color:var(--muted);border:1px solid var(--rule-strong);border-radius:999px;padding:8px 12px;background:var(--sheet)}
+.status .dot{width:7px;height:7px;border-radius:50%;background:var(--fix)}
+.status.busy .dot{background:var(--med);animation:pulse 1s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.25}}
+.ghost{display:inline-grid;place-items:center;width:34px;height:34px;border-radius:999px;border:1px solid var(--rule-strong);background:var(--sheet);color:var(--muted);cursor:pointer}
+.ghost:hover{color:var(--ink);border-color:var(--ink)}
 
-.controls{position:sticky;top:0;z-index:3;background:var(--bg);display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;padding:14px 0;margin-top:20px;border-bottom:1px solid var(--line)}
-.controls input[type=search]{flex:1 1 240px;border:1px solid var(--line);background:transparent;color:var(--fg);border-radius:8px;padding:8px 12px;font:inherit;font-size:14px}
-.controls input[type=search]:focus{outline:none;border-color:var(--fg)}
-.controls label{font-size:14px;color:var(--muted);display:flex;gap:6px;align-items:center;cursor:pointer;user-select:none}
-.controls button{background:none;border:0;color:var(--muted);font:inherit;font-size:14px;cursor:pointer;padding:0}
-.controls button:hover{color:var(--fg)}
-.theme{margin-left:auto}
-.live{display:flex;gap:8px;align-items:center}
-.controls .btn{border:1px solid var(--line);border-radius:8px;padding:6px 12px;color:var(--fg);background:var(--bg)}
-.controls .btn:hover{border-color:var(--fg)}
-.controls .btn:disabled{opacity:.5;cursor:wait}
-.controls select{border:1px solid var(--line);border-radius:8px;padding:6px 8px;background:var(--bg);color:var(--fg);font:inherit;font-size:13px}
-.estado{font-size:13px;color:var(--muted);margin:10px 0 0;min-height:20px}
-.tag.new{color:var(--ok);border-color:var(--ok)}
+/* índice: tabla de contenidos del dossier */
+/* pestañas de vista y selector de periodo */
+.views{display:flex;justify-content:space-between;align-items:flex-end;gap:12px 24px;flex-wrap:wrap;margin-top:32px}
+.tabs{display:flex;gap:28px}
+.tabs button{background:none;border:0;border-bottom:2px solid transparent;padding:4px 0 8px;font:500 15px var(--f-body);color:var(--muted);cursor:pointer}
+.tabs button:hover{color:var(--ink)}
+.tabs button[aria-selected="true"]{color:var(--ink);border-color:var(--ink)}
+.range{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:13.5px;color:var(--muted);padding-bottom:8px}
+.presets{display:flex;gap:4px;flex-wrap:wrap}
+.presets button,.range input[type=date]{border:1px solid var(--rule-strong);background:var(--sheet);color:var(--text);border-radius:999px;padding:5px 12px;font:inherit;font-size:13px;cursor:pointer}
+.presets button:hover{border-color:var(--ink)}
+.presets button.on{background:var(--ink);border-color:var(--ink);color:var(--sheet)}
 
-/* fabricante y producto */
-.vendor{margin-top:56px;scroll-margin-top:70px}
-.vendor>h2{font-size:22px;font-weight:700;letter-spacing:-.01em;margin:0;display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
-.vendor>h2 small{font-size:13px;font-weight:400;color:var(--muted)}
-.product{margin-top:20px}
-.product>h3{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:0 0 4px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+/* índice: una sola fila de fabricantes entre dos líneas a todo el ancho */
+.toc{display:flex;flex-wrap:wrap;align-items:baseline;gap:10px 48px;margin-top:0;padding-block:16px;border-top:1px solid var(--ink);border-bottom:1px solid var(--ink)}
+.toc a{display:inline-flex;align-items:baseline;gap:10px;text-decoration:none;color:var(--ink)}
+.toc a:hover .tn{color:var(--accent)}
+.toc .tc{font:500 11px var(--f-body);color:var(--faint)}
+.toc .tn{font:400 22px/1.15 var(--f-display);transition:color .15s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.toc .tq{font:500 12px var(--f-body);color:var(--muted);white-space:nowrap}
+.toc .tq .x{color:var(--exploit)}
 
-/* bloque CVE */
-.cve{border-bottom:1px solid var(--line)}
-.cve>summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:12px;padding:14px 0;flex-wrap:wrap}
+/* ---------- herramientas ---------- */
+.tools{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--paper) 90%,transparent);backdrop-filter:saturate(1.2) blur(10px);border-bottom:1px solid var(--rule)}
+.tb{display:flex;flex-wrap:wrap;align-items:center;gap:8px 20px;padding-block:12px}
+.search{flex:1 1 280px;display:flex;align-items:center;gap:10px;color:var(--faint);border-bottom:1px solid var(--rule-strong);padding:6px 2px}
+.search:focus-within{border-color:var(--ink);color:var(--ink)}
+.search input{flex:1;min-width:0;border:0;background:transparent;font:inherit;font-size:14.5px;color:var(--ink);outline:none}
+.search input::placeholder{color:var(--faint)}
+.opt{display:inline-flex;align-items:center;gap:8px;font-size:13.5px;color:var(--text);cursor:pointer;user-select:none}
+.opt input{appearance:none;margin:0;width:15px;height:15px;border:1px solid var(--rule-strong);border-radius:4px;display:grid;place-items:center;cursor:pointer;background:var(--sheet)}
+.opt input:checked{background:var(--exploit);border-color:var(--exploit)}
+.opt input:checked::after{content:"";width:7px;height:4px;border:1.6px solid #fff;border-top:0;border-right:0;transform:rotate(-45deg) translate(1px,-1px)}
+.link{background:none;border:0;padding:0;font:inherit;font-size:13.5px;color:var(--text);cursor:pointer;text-decoration:underline;text-decoration-color:var(--rule-strong);text-underline-offset:4px}
+.link:hover{color:var(--ink);text-decoration-color:var(--ink)}
+.tb select{font:inherit;font-size:13px;color:var(--text);background:transparent;border:1px solid var(--rule-strong);border-radius:999px;padding:6px 10px;cursor:pointer}
+.go{display:inline-flex;align-items:center;gap:8px;font:500 13.5px var(--f-body);color:var(--sheet);background:var(--ink);border:0;border-radius:999px;padding:8px 16px;cursor:pointer}
+.go:hover{background:var(--accent)}
+.go:disabled{opacity:.6;cursor:progress}
+.go:disabled svg{animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.estado{margin:0;padding-bottom:10px;font:12px var(--f-body);color:var(--muted)}
+.estado:empty{display:none}
+
+/* ---------- capítulo por fabricante ---------- */
+.vendor{padding-block:56px;scroll-margin-top:72px}
+.vside{display:flex;align-items:baseline;gap:16px;margin-bottom:28px}
+.vno{font:500 11px var(--f-body);letter-spacing:.14em;color:var(--faint)}
+.vside h2{font:400 clamp(36px,5vw,52px)/1 var(--f-display);color:var(--ink);margin:0;letter-spacing:-.01em;text-wrap:balance}
+
+/* producto */
+.product + .product{margin-top:40px}
+.phead{display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding-bottom:10px;border-bottom:1px solid var(--ink)}
+.phead h3{margin:0;font:600 16px/1.3 var(--f-body);color:var(--ink)}
+.phead span{font:500 11.5px var(--f-body);color:var(--muted);letter-spacing:.06em;text-transform:uppercase}
+
+/* ---------- CVE ---------- */
+.cve{border-bottom:1px solid var(--rule)}
+.cve>summary{list-style:none;cursor:pointer;display:grid;grid-template-columns:92px minmax(0,1fr) auto;gap:20px;align-items:start;padding:18px 0}
 .cve>summary::-webkit-details-marker{display:none}
-.cve>summary::before{content:"";width:6px;height:6px;border-right:1.5px solid var(--faint);border-bottom:1.5px solid var(--faint);transform:rotate(-45deg);transition:transform .15s;margin:0 2px 0 0}
-.cve[open]>summary::before{transform:rotate(45deg)}
-.id{font-weight:500}
-.sev{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--c);font-weight:600;font-variant-numeric:tabular-nums}
-.sev::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--c)}
-.tag{font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--kev);border:1px solid var(--kev);border-radius:4px;padding:0 6px}
-.date{margin-left:auto;font-size:13px;color:var(--faint)}
-.body{padding:0 0 22px 20px}
-.row{display:grid;grid-template-columns:150px minmax(0,1fr);gap:16px;padding:12px 0;border-top:1px dashed var(--line)}
-.row:first-child{border-top:0;padding-top:0}
-.lbl{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--faint);padding-top:3px}
-.desc{margin:0;color:var(--fg)}
-.resumen{margin:0 0 10px;font-weight:600}
-.reqs{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:8px 18px;margin:0}
-.reqs div{display:flex;flex-direction:column}
-.reqs dt{font-size:12px;color:var(--muted)}
-.reqs dd{margin:0;font-size:14px}
-.reqs dd.peor{color:var(--high);font-weight:600}
-.cond{margin:10px 0 0;font-size:14px;color:var(--muted)}
-table{border-collapse:collapse;width:100%;font-size:14px}
-th{font-size:12px;font-weight:500;color:var(--muted);text-align:left;padding:0 12px 6px 0;border-bottom:1px solid var(--line)}
-td{padding:7px 12px 7px 0;border-bottom:1px solid var(--soft);vertical-align:top}
-tr:last-child td{border-bottom:0}
-td.fix{color:var(--ok);font-weight:600;white-space:nowrap}
+.cve>summary:hover .cid{color:var(--accent)}
+.sc{display:flex;flex-direction:column;gap:6px}
+.sc b{font:600 26px/1 var(--f-body);color:var(--c);font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.sc small{font:600 10px/1 var(--f-body);letter-spacing:.12em;text-transform:uppercase;color:var(--c)}
+/* escala CVSS de 0 a 10: diez marcas, rellenas hasta la puntuación */
+.ticks{display:grid;grid-template-columns:repeat(10,1fr);gap:2px;width:80px}
+.ticks i{height:4px;border-radius:1px;background:var(--rule)}
+.ticks i.on{background:var(--c)}
+.cmain{min-width:0}
+.cline{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.cid{font:600 15px var(--f-body);color:var(--ink);font-variant-numeric:tabular-nums;transition:color .15s}
+.flag{display:inline-flex;align-items:center;gap:6px;font:600 10.5px/1 var(--f-body);letter-spacing:.1em;text-transform:uppercase;color:var(--exploit);background:var(--exploit-wash);padding:5px 8px;border-radius:999px}
+.flag::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+.flag.kev::before{animation:pulse 1.6s ease-in-out infinite}
+.flag.new{color:var(--fix);background:var(--fix-wash)}
+.excerpt{margin:6px 0 0;color:var(--text);font-size:14.5px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;max-width:72ch}
+.cve[open] .excerpt{display:none}
+.cright{display:flex;align-items:center;gap:14px;font:12px var(--f-body);color:var(--muted);white-space:nowrap;padding-top:4px}
+.plus{width:22px;height:22px;border:1px solid var(--rule-strong);border-radius:50%;display:grid;place-items:center;color:var(--muted);transition:transform .2s,border-color .2s}
+.cve>summary:hover .plus{border-color:var(--ink);color:var(--ink)}
+.cve[open] .plus{transform:rotate(45deg)}
+
+.body{margin-left:112px;padding-bottom:30px;display:grid;gap:26px}
+.sec{display:grid;grid-template-columns:120px minmax(0,1fr);gap:20px}
+.sec>h4{margin:0;font:500 11px/1.9 var(--f-body);letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.sec>div{min-width:0}
+.desc{margin:0;color:var(--ink);font-size:15px;line-height:1.7;max-width:68ch}
+.verdict{margin:0 0 14px;font:600 16.5px/1.45 var(--f-body);color:var(--ink);text-wrap:balance}
+.spec{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:0 24px;margin:0}
+.spec div{display:flex;flex-direction:column;gap:3px;padding:10px 0 12px;border-top:1px solid var(--rule)}
+.spec dt{font:500 10.5px var(--f-body);letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.spec dd{margin:0;font-size:14px;font-weight:500;color:var(--ink);line-height:1.4}
+.spec .worst dd{color:var(--exploit)}
+.spec .worst dd::before{content:"●";font-size:8px;vertical-align:2px;margin-right:6px}
+.cond{margin:16px 0 0;padding-left:14px;border-left:2px solid var(--med);color:var(--text);font-size:14px;max-width:68ch}
+.cond b{color:var(--ink);font-weight:600}
 .tblwrap{overflow-x:auto}
-table.vtable{border:1px solid var(--line)}
-.vtable th,.vtable td{border:1px solid var(--line);padding:8px 12px}
-.vtable th{background:var(--soft);color:var(--fg);font-weight:600}
+table.vtable{border-collapse:collapse;width:100%;font-size:13.5px;background:var(--sheet)}
+.vtable th,.vtable td{border:1px solid var(--rule-strong);padding:10px 14px;text-align:left;vertical-align:middle}
+.vtable th{font:500 10.5px var(--f-body);letter-spacing:.12em;text-transform:uppercase;color:var(--muted);background:var(--wash)}
+.vtable td{color:var(--ink)}
 .vtable td.mono{white-space:nowrap}
-.nota{margin:10px 0 0;font-size:13px;color:var(--muted)}
-.links{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:13px;color:var(--muted)}
-.empty{color:var(--muted);padding:40px 0;text-align:center}
+.vtable td.fx{color:var(--fix);font-weight:600}
+.vtable td.fx::before{content:"↑ ";color:var(--fix)}
+.nota{margin:12px 0 0;font-size:13.5px;color:var(--muted);max-width:68ch}
+.refs{display:flex;flex-wrap:wrap;gap:10px 22px;align-items:center;font-size:13.5px}
+.refs a{display:inline-flex;align-items:center;gap:6px;color:var(--ink);text-decoration:underline;text-decoration-color:var(--rule-strong);text-underline-offset:4px}
+.refs a:hover{color:var(--accent);text-decoration-color:currentColor}
+.refs span{font:12px var(--f-body);color:var(--muted)}
+.refs .due{color:var(--exploit)}
+.empty{padding:80px 0;text-align:center;font-size:16px;color:var(--muted)}
 
 .s-CRITICAL{--c:var(--crit)} .s-HIGH{--c:var(--high)} .s-MEDIUM{--c:var(--med)} .s-LOW{--c:var(--low)} .s-NONE{--c:var(--none)}
 
-footer{margin-top:72px;font-size:12px;color:var(--faint)}
+footer{padding-block:40px 64px;display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;font:12px var(--f-body);color:var(--faint)}
 
-@media (max-width:640px){.row{grid-template-columns:minmax(0,1fr);gap:4px}.body{padding-left:0}.date{margin-left:0;width:100%}}
-@media print{.controls{display:none}.cve>summary::before{display:none}}
+@media (max-width:900px){.vendor{padding-block:40px}}
+@media (max-width:640px){
+  .cve>summary{grid-template-columns:80px minmax(0,1fr)} .cright{grid-column:2;padding-top:0}
+  .body{margin-left:0} .sec{grid-template-columns:minmax(0,1fr);gap:8px}
+  .masthead{padding-block:36px 24px}
+}
 </style></head>
-<body><div class="wrap">
-<header>
-  <h1>Informe Vulnerabilidades</h1>
-  <p class="sub" id="periodo"></p>
-  <nav class="index" id="index"></nav>
+<body>
+<header class="wrap masthead">
+  <div class="mrow">
+    <div class="kicker"><b>Seguridad perimetral</b><span id="periodo"></span></div>
+    <div class="meta-r">
+      <span class="status" id="status"><span class="dot"></span><span id="statustxt"></span></span>
+      <button class="ghost" id="theme" title="Cambiar a tema oscuro" aria-label="Cambiar tema"><svg class="i" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg></button>
+    </div>
+  </div>
+  <h1>Informe <em>Vulnerabilidades</em></h1>
+  <div class="views">
+    <div class="tabs" role="tablist" aria-label="Vista">
+      <button role="tab" id="tab-rec" aria-selected="true"></button>
+      <button role="tab" id="tab-per" aria-selected="false">Por periodo</button>
+    </div>
+    <div class="range" id="range" hidden>
+      <span>Desde</span>
+      <div class="presets" id="presets">
+        <button data-d="30">30 días</button><button data-d="90">90 días</button><button data-d="182">6 meses</button><button data-d="365">1 año</button>
+      </div>
+      <input type="date" id="desde" aria-label="Fecha de inicio">
+      <span>hasta hoy</span>
+    </div>
+  </div>
+  <nav class="toc" id="index"></nav>
 </header>
-<div class="controls">
-  <input type="search" id="q" placeholder="Buscar CVE, producto, versión…">
-  <label><input type="checkbox" id="kev"> Solo explotadas</label>
-  <button id="toggle">Expandir todo</button>
-  <span class="live">
-    <button id="refresh" class="btn">↻ Actualizar</button>
-    <select id="auto" title="Actualización automática">
-      <option value="0">Auto: no</option><option value="15">Cada 15 min</option><option value="30">Cada 30 min</option>
+
+<div class="tools"><div class="wrap">
+  <div class="tb">
+    <label class="search"><svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input type="search" id="q" placeholder="Buscar por CVE, producto o versión" autocomplete="off"></label>
+    <label class="opt"><input type="checkbox" id="kev"> Solo explotadas</label>
+    <button class="link" id="toggle">Expandir todo</button>
+    <select id="auto" aria-label="Actualización automática">
+      <option value="0">Actualización automática: no</option><option value="15">Cada 15 min</option><option value="30">Cada 30 min</option>
       <option value="60">Cada hora</option><option value="120">Cada 2 h</option><option value="360">Cada 6 h</option>
     </select>
-  </span>
-  <button class="theme" id="theme">Tema</button>
-</div>
-<p class="estado" id="estado"></p>
-<main id="main"></main>
-<footer>Fuentes: NVD (NIST), CVE.org (datos del fabricante) y CISA KEV. Confirma siempre las versiones en el aviso oficial del fabricante antes de actualizar.</footer>
-</div>
+    <button class="go" id="refresh"><svg class="i" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 4v5h-5"/></svg>Actualizar</button>
+  </div>
+  <p class="estado" id="estado"></p>
+</div></div>
+
+<main class="wrap" id="main"></main>
+<footer class="wrap"><span>Fuentes: NVD (NIST) · CVE.org · CISA KEV</span></footer>
 <script>
-// Datos generados por vulns_perimetrales.py (instantánea inicial) y configuración para actualizar en directo
-let DATA = __DATA__;
+// Datos generados por vulns_perimetrales.py: todas las CVEs del periodo cubierto (por defecto 30 días)
 const CONFIG = __CONFIG__;
 const SEV = {CRITICAL:"Crítica",HIGH:"Alta",MEDIUM:"Media",LOW:"Baja"};
 const sk = s => SEV[s] ? s : "NONE";
@@ -624,80 +738,124 @@ const PEOR = ["Red (remoto)","Ninguno (sin autenticación)","No necesaria","Baja
 const prio = r => (r.explotada_kev ? 100 : 0) + (r.cvss || 0);
 const store = {
   get(k){ try { return JSON.parse(localStorage.getItem(k)); } catch(e) { return null; } },
-  set(k,v){ try { localStorage.setItem(k, JSON.stringify(v)); } catch(e) {} },
+  set(k,v){ try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch(e) { return false; } },
 };
-const CLAVE = "vp-estado-" + CONFIG.dias + "-" + Object.keys(CONFIG.fabricantes).sort().join(",");
+const CLAVE = "vp-archivo-" + Object.keys(CONFIG.fabricantes).sort().join(",") + "-" + CONFIG.min_cvss + (CONFIG.solo_kev ? "-kev" : "");
+const MAX_DIAS = 365;   // el panel «Por periodo» permite ir como mucho un año atrás
+const isoDia = d => new Date(d).toISOString().slice(0, 10);
+const haceDias = n => isoDia(Date.now() - n * 864e5);
 
-// Estado: la instantánea del HTML o, si es más reciente, la última actualización hecha en este navegador
-let estado = {hasta: CONFIG.generado, completa: CONFIG.generado, data: DATA};
+// Archivo: lo que trae el HTML combinado con lo que este navegador haya descargado después
+let estado = {desde: CONFIG.cubre_desde, hasta: CONFIG.generado, completa: CONFIG.generado, data: __DATA__};
 const guardado = store.get(CLAVE);
-if (guardado && guardado.hasta > estado.hasta) { estado = guardado; DATA = guardado.data; }
+if (guardado && Array.isArray(guardado.data)) {
+  const [viejo, nuevo] = guardado.hasta > estado.hasta ? [estado, guardado] : [guardado, estado];
+  const m = new Map(viejo.data.map(r => [r.cve, r]));
+  nuevo.data.forEach(r => m.set(r.cve, r));
+  estado = {desde: viejo.desde < nuevo.desde ? viejo.desde : nuevo.desde, hasta: nuevo.hasta,
+            completa: viejo.completa > nuevo.completa ? viejo.completa : nuevo.completa, data: [...m.values()]};
+}
+// Si con el histórico largo no cabe en el navegador, se guarda solo lo del periodo base (el resto se recarga del archivo)
+const guardar = () => {
+  if (store.set(CLAVE, estado)) return;
+  const base = CONFIG.cubre_desde > estado.desde ? CONFIG.cubre_desde : estado.desde;
+  if (!store.set(CLAVE, {...estado, desde: base, data: estado.data.filter(r => r.publicado >= isoDia(base))}))
+    console.warn("No cabe el estado en el almacenamiento del navegador");
+};
 
-// tema
+// Vista: «Últimos N días» o «Por periodo» (desde una fecha elegida hasta hoy)
+let vista = store.get("vp-vista") === "periodo" ? "periodo" : "recientes";
+let desdeSel = store.get("vp-desde") || haceDias(30);
+if (desdeSel < haceDias(MAX_DIAS)) desdeSel = haceDias(MAX_DIAS);
+const corteVista = () => vista === "recientes" ? isoDia(new Date(estado.hasta) - CONFIG.dias * 864e5) : desdeSel;
+const datosVista = () => { const c = corteVista(); return estado.data.filter(r => r.publicado >= c); };
+
+// tema: siempre claro salvo que el usuario elija el oscuro con el botón
 const root = document.documentElement;
-try { const t = localStorage.getItem("vp-theme"); if (t) root.dataset.theme = t; } catch(e) {}
+if (store.get("vp-theme2") === "dark") root.dataset.theme = "dark";
 $("theme").onclick = () => {
-  const dark = root.dataset.theme ? root.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
-  root.dataset.theme = dark ? "light" : "dark";
-  try { localStorage.setItem("vp-theme", root.dataset.theme); } catch(e) {}
+  const oscuro = root.dataset.theme !== "dark";
+  if (oscuro) root.dataset.theme = "dark"; else delete root.dataset.theme;
+  store.set("vp-theme2", oscuro ? "dark" : "light");
 };
 
 // ---------------------------------------------------------------- pintado
+const ICO = {
+  ext:  '<path d="M7 17 17 7M8 7h9v9"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+};
+const ico = k => `<svg class="i" viewBox="0 0 24 24">${ICO[k]}</svg>`;
+const extracto = t => t.trim().split(/(?<=\.)\s/)[0];
+const ticks = v => `<span class="ticks">${Array.from({length:10}, (_, i) => `<i class="${v != null && v > i ? "on" : ""}"></i>`).join("")}</span>`;
+const NOMBRES = {CRITICAL:["Crítica","Críticas"],HIGH:["Alta","Altas"],MEDIUM:["Media","Medias"],LOW:["Baja","Bajas"],NONE:["Sin puntuar","Sin puntuar"]};
+
 function bloque(r){
   const s = sk(r.severidad);
   const reqs = r.requisitos.length
-    ? `<p class="resumen">${esc(r.resumen_explotacion)}</p><dl class="reqs">${r.requisitos.map(([k,v]) =>
-        `<div><dt>${esc(k)}</dt><dd class="${PEOR.includes(v)?"peor":""}">${esc(v)}</dd></div>`).join("")}</dl>`
+    ? `<p class="verdict">${esc(r.resumen_explotacion)}</p>
+       <dl class="spec">${r.requisitos.map(([k,v]) => `<div class="${PEOR.includes(v)?"worst":""}"><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join("")}</dl>`
     : `<p class="nota">El fabricante aún no ha publicado la métrica CVSS.</p>`;
-  const cond = r.condiciones.length ? `<p class="cond"><b>Condiciones:</b> ${esc(r.condiciones.join(" "))}</p>` : "";
+  const cond = r.condiciones.length ? `<p class="cond"><b>Condiciones.</b> ${esc(r.condiciones.join(" "))}</p>` : "";
   const vers = r.versiones.length
     ? `<div class="tblwrap"><table class="vtable"><thead><tr><th>Producto</th><th>Versiones afectadas</th><th>Actualizar a</th></tr></thead><tbody>${
-        r.versiones.map(v => `<tr><td>${esc(v.producto)}</td><td class="mono">${esc(v.afectadas)}</td><td class="mono fix">${esc(v.corregida)}</td></tr>`).join("")
+        r.versiones.map(v => `<tr><td>${esc(v.producto)}</td><td class="mono">${esc(v.afectadas)}</td><td class="mono fx">${esc(v.corregida)}</td></tr>`).join("")
       }</tbody></table></div>`
     : `<p class="nota">Sin datos de versiones estructurados. Consulta el aviso del fabricante.</p>`;
   const sol = r.solucion.length ? `<p class="nota">${esc(r.solucion.join(" "))}</p>` : "";
-  return `<details class="cve${r.nueva ? " nueva" : ""}" data-id="${esc(r.cve)}" data-kev="${r.explotada_kev?1:0}" data-q="${esc([r.cve,r.fabricante,r.producto,r.descripcion,r.cwe,r.versiones.map(v=>v.afectadas+" "+v.corregida).join(" ")].join(" ").toLowerCase())}">
+  return `<details class="cve s-${s}" data-id="${esc(r.cve)}" data-kev="${r.explotada_kev?1:0}" data-q="${esc([r.cve,r.fabricante,r.producto,r.descripcion,r.cwe,r.versiones.map(v=>v.afectadas+" "+v.corregida).join(" ")].join(" ").toLowerCase())}">
     <summary>
-      <code class="id">${esc(r.cve)}</code>
-      <span class="sev s-${s}">${r.cvss != null ? Number(r.cvss).toFixed(1) : "—"} ${SEV[s] || "Sin puntuar"}</span>
-      ${r.explotada_kev ? `<span class="tag">Explotada</span>` : ""}
-      ${r.nueva ? `<span class="tag new">Nueva</span>` : ""}
-      <span class="date">${fecha(r.publicado)}</span>
+      <div class="sc"><b>${r.cvss != null ? Number(r.cvss).toFixed(1) : "—"}</b>${ticks(r.cvss)}<small>${SEV[s] || "Sin puntuar"}</small></div>
+      <div class="cmain">
+        <div class="cline"><span class="cid">${esc(r.cve)}</span>
+          ${r.explotada_kev ? `<span class="flag kev">Explotada</span>` : ""}
+          ${r.nueva ? `<span class="flag new">Nueva</span>` : ""}</div>
+        <p class="excerpt">${esc(extracto(r.descripcion))}</p>
+      </div>
+      <div class="cright">${fecha(r.publicado)}<span class="plus">${ico("plus")}</span></div>
     </summary>
     <div class="body">
-      <div class="row"><div class="lbl">Descripción</div><p class="desc">${esc(r.descripcion.trim())}</p></div>
-      <div class="row"><div class="lbl">Explotación</div><div>${reqs}${cond}</div></div>
-      <div class="row"><div class="lbl">Versiones</div><div>${vers}${sol}</div></div>
-      <div class="row"><div class="lbl">Referencias</div><div class="links">
-        <a href="${esc(r.url)}" target="_blank" rel="noopener">NVD ↗</a>
-        ${r.aviso ? `<a href="${esc(r.aviso)}" target="_blank" rel="noopener">Aviso del fabricante ↗</a>` : ""}
-        ${r.cwe ? `<span class="mono">${esc(r.cwe)}</span>` : ""}
-        ${r.kev_fecha_limite ? `<span style="color:var(--kev)">Límite CISA: ${fecha(r.kev_fecha_limite)}</span>` : ""}
-      </div></div>
+      <section class="sec"><h4>Descripción</h4><div><p class="desc">${esc(r.descripcion.trim())}</p></div></section>
+      <section class="sec"><h4>Explotación</h4><div>${reqs}${cond}</div></section>
+      <section class="sec"><h4>Versiones</h4><div>${vers}${sol}</div></section>
+      <section class="sec"><h4>Referencias</h4><div class="refs">
+        <a href="${esc(r.url)}" target="_blank" rel="noopener">NVD${ico("ext")}</a>
+        ${r.aviso ? `<a href="${esc(r.aviso)}" target="_blank" rel="noopener">Aviso del fabricante${ico("ext")}</a>` : ""}
+        ${r.cwe ? `<span>${esc(r.cwe)}</span>` : ""}
+        ${r.kev_fecha_limite ? `<span class="due">Límite CISA ${fecha(r.kev_fecha_limite)}</span>` : ""}
+      </div></section>
     </div></details>`;
 }
 
 function render(){
   const abiertos = new Set([...document.querySelectorAll(".cve[open]")].map(d => d.dataset.id));
   const grupos = {};
-  DATA.forEach(r => ((grupos[r.fabricante] ??= {})[r.producto] ??= []).push(r));
+  datosVista().forEach(r => ((grupos[r.fabricante] ??= {})[r.producto] ??= []).push(r));
   const fabs = Object.keys(grupos).map(f => {
     const todos = Object.values(grupos[f]).flat();
     return {f, todos, max: Math.max(...todos.map(prio))};
   }).sort((a,b) => b.max - a.max || b.todos.length - a.todos.length);
+  const cuenta = (lista, k) => lista.filter(r => sk(r.severidad) === k).length;
+  const num = i => String(i + 1).padStart(2, "0");
 
-  const desde = new Date(new Date(estado.hasta) - CONFIG.dias * 864e5);
-  $("periodo").textContent = `Publicadas del ${desde.toLocaleDateString("es-ES")} al ${new Date(estado.hasta).toLocaleDateString("es-ES")} · actualizado ${fechaHora(estado.hasta)}`;
-  $("index").innerHTML = fabs.map(x => `<a href="#${slug(x.f)}">${esc(x.f)}<span>${x.todos.length}</span></a>`).join("");
-  $("main").innerHTML = fabs.length ? fabs.map(({f, todos}) => {
-    const c = k => todos.filter(r => sk(r.severidad) === k).length;
-    const resumen = [[c("CRITICAL"),"crítica"],[c("HIGH"),"alta"],[c("MEDIUM"),"media"],[todos.filter(r=>r.explotada_kev).length,"explotada"]]
-      .filter(x => x[0]).map(([n, t]) => `${n} ${t}${n > 1 ? "s" : ""}`).join(" · ");
+  const desde = new Date(corteVista() + "T00:00:00"), hasta = new Date(estado.hasta);
+  const fmt = d => d.toLocaleDateString("es-ES",{day:"numeric",month:"long",...(d.getFullYear() !== hasta.getFullYear() ? {year:"numeric"} : {})});
+  $("periodo").textContent = `${fmt(desde)} — ${fmt(hasta)} ${hasta.getFullYear()}`;
+  $("statustxt").textContent = `Actualizado ${fechaHora(estado.hasta)}`;
+
+  $("index").innerHTML = fabs.map(({f, todos}, i) => {
+    const kevn = todos.filter(r => r.explotada_kev).length;
+    return `<a href="#${slug(f)}"><span class="tc">${num(i)}</span><span class="tn">${esc(f)}</span>
+      <span class="tq">${todos.length} CVE${todos.length>1?"s":""}${kevn ? ` · <span class="x">${kevn} expl.</span>` : ""}</span></a>`;
+  }).join("");
+
+  $("main").innerHTML = fabs.length ? fabs.map(({f}, i) => {
     const prods = Object.entries(grupos[f]).sort((a,b) => Math.max(...b[1].map(prio)) - Math.max(...a[1].map(prio)));
-    return `<section class="vendor" id="${slug(f)}"><h2>${esc(f)} <small>${todos.length} CVE${todos.length>1?"s":""}${resumen ? " · " + resumen : ""}</small></h2>
-      ${prods.map(([p, rows]) => `<div class="product"><h3>${esc(p)}</h3>${rows.sort((a,b)=>prio(b)-prio(a)).map(bloque).join("")}</div>`).join("")}
+    return `<section class="vendor" id="${slug(f)}">
+      <header class="vside"><span class="vno">${num(i)} / ${String(fabs.length).padStart(2, "0")}</span><h2>${esc(f)}</h2></header>
+      <div>${prods.map(([p, rows]) => `<div class="product"><div class="phead"><h3>${esc(p)}</h3><span>${rows.length} CVE${rows.length>1?"s":""}</span></div>
+        ${rows.sort((a,b)=>prio(b)-prio(a)).map(bloque).join("")}</div>`).join("")}</div>
     </section>`;
-  }).join("") : `<p class="empty">No hay vulnerabilidades en el periodo.</p>`;
+  }).join("") : `<p class="empty">No hay vulnerabilidades en este periodo.</p>`;
   document.querySelectorAll(".cve").forEach(d => { if (abiertos.has(d.dataset.id)) d.open = true; });
   filtrar();
 }
@@ -813,19 +971,19 @@ async function getJSON(url, intentos = 3){
   }
 }
 
-async function descargarNVD(desde, hasta){
+async function descargarNVD(desde, hasta, tramo = ""){
   const iso = d => d.toISOString().replace(/\.\d+Z$/, ".000Z");
   const out = []; let start = 0, total = null;
   while (true) {
     const pag = Math.floor(start / 2000) + 1;
-    estadoTxt(`Descargando NVD${total ? ` · página ${pag}/${Math.ceil(total/2000)}` : ""}…`);
+    estadoTxt(`Descargando NVD${tramo ? ` · ${tramo}` : ""}${total ? ` · página ${pag}/${Math.ceil(total/2000)}` : ""}…`);
     const u = `${CONFIG.nvd}?pubStartDate=${iso(desde)}&pubEndDate=${iso(hasta)}&resultsPerPage=2000&startIndex=${start}`;
     const d = await getJSON(u);
     const lote = d.vulnerabilities || [];
     out.push(...lote.map(v => v.cve));
     total = d.totalResults || 0; start += lote.length;
     if (!lote.length || start >= total) return out;
-    estadoTxt(`NVD: ${start}/${total} CVEs · esperando límite de la API…`);
+    estadoTxt(`NVD${tramo ? ` · ${tramo}` : ""}: ${start}/${total} CVEs · esperando límite de la API…`);
     await espera(6500);   // límite público de NVD sin clave: 5 peticiones / 30 s
   }
 }
@@ -849,7 +1007,7 @@ async function detalleCNA(ids){
   };
   if (pend.length) await Promise.all(Array.from({length: 6}, trabajador));
   // la caché del navegador solo guarda lo de los últimos 120 días aproximadamente
-  for (const k of Object.keys(cache)) if (ahora - cache[k].t > 120 * 864e5) delete cache[k];
+  for (const k of Object.keys(cache)) if (ahora - cache[k].t > 30 * 864e5) delete cache[k];
   store.set("vp-cna", cache);
   return cache;
 }
@@ -874,10 +1032,12 @@ function enriquecer(r, c){
   r.versiones = versionesCNA(c && c.affected);
   if (!r.versiones.length && r._nvd) r.versiones = versionesNVD(r._nvd);
   if (!r.versiones.length) r.versiones = previas;
-  let prods = [...new Set(((c && c.affected) || []).map(a => a.product).filter(Boolean))];
+  const valido = n => !!n && !["n/a","na","unknown","unspecified","*","-"].includes(n.trim().toLowerCase());
+  let prods = [...new Set(((c && c.affected) || []).map(a => a.product).filter(valido))];
   if (!prods.length && r._nvd) prods = [...new Set(cpes(r._nvd).map(m => (m.criteria || "").split(":")[4]).filter(Boolean)
                                            .map(p => p.replace(/_/g," ").replace(/\b\w/g, x => x.toUpperCase())))];
-  r.producto = prods.join(", ") || r.producto || "General";
+  r.producto = prods.join(", ") || r.producto || "Producto no especificado";
+  r.versiones.forEach(v => { if (!valido(v.producto.split(" (")[0])) v.producto = r.producto; });
   r.condiciones = textos(c && c.configurations);
   r.solucion = [...textos(c && c.solutions), ...textos(c && c.workarounds).map(t => "Mitigación: " + t)];
   const refs = (c && c.references && c.references.length) ? c.references : ((r._nvd && r._nvd.references) || []);
@@ -887,57 +1047,167 @@ function enriquecer(r, c){
 }
 
 let actualizando = false;
+function ocupado(si){
+  actualizando = si;
+  $("refresh").disabled = si;
+  $("status").classList.toggle("busy", si);
+}
+
+// KEV: copia oficial de CISA en GitHub (la web de CISA no permite consultas desde el navegador)
+async function cargarKEV(){
+  estadoTxt("Descargando catálogo CISA KEV…");
+  try { return {ok: true, map: Object.fromEntries(((await getJSON(CONFIG.kev, 2)).vulnerabilities || []).map(v => [v.cveID, v]))}; }
+  catch (e) {
+    console.warn("KEV", e);
+    return {ok: false, map: Object.fromEntries(estado.data.filter(r => r.explotada_kev).map(r => [r.cve, {dueDate: r.kev_fecha_limite}]))};
+  }
+}
+
+// De los CVEs brutos de NVD, se queda con los de los fabricantes vigilados
+function procesar(brutos, kevMap){
+  const out = [];
+  for (const cve of brutos) {
+    if (cve.vulnStatus === "Rejected") continue;
+    const r = construir(cve, kevMap);
+    if (!r.fabricante) continue;
+    if (CONFIG.min_cvss && (r.cvss == null || r.cvss < CONFIG.min_cvss)) continue;
+    if (CONFIG.solo_kev && !r.explotada_kev) continue;
+    out.push(r);
+  }
+  return out;
+}
+
+// Trae lo publicado desde la última actualización (y, una vez al día, rehace los últimos días para recoger cambios)
 async function actualizar(){
   if (actualizando) return;
-  actualizando = true;
-  $("refresh").disabled = true;
+  ocupado(true);
   const hasta = new Date();
   try {
-    // KEV: copia oficial de CISA en GitHub (la web de CISA no permite consultas desde el navegador)
-    estadoTxt("Descargando catálogo CISA KEV…");
-    let kev = null;
-    try { kev = Object.fromEntries(((await getJSON(CONFIG.kev, 2)).vulnerabilities || []).map(v => [v.cveID, v])); }
-    catch (e) { console.warn("KEV", e); }
-
-    // Incremental: si la última descarga completa tiene menos de 24 h, solo pedimos lo nuevo (con 6 h de solape)
-    const desdePeriodo = new Date(hasta - CONFIG.dias * 864e5);
+    const kev = await cargarKEV();
     const completa = hasta - new Date(estado.completa) > 24 * 3600e3;
-    const desdeNVD = completa ? desdePeriodo : new Date(Math.max(desdePeriodo, new Date(estado.hasta) - 6 * 3600e3));
-    const nuevos = await descargarNVD(desdeNVD, hasta);
+    let desdeNVD = completa ? new Date(hasta - CONFIG.dias * 864e5) : new Date(new Date(estado.hasta) - 6 * 3600e3);
+    if (desdeNVD < new Date(estado.desde)) desdeNVD = new Date(estado.desde);
+    const nuevos = procesar(await descargarNVD(desdeNVD, hasta), kev.map);
 
-    const previos = new Map((completa ? [] : DATA).map(r => [r.cve, r]));
-    const kevMap = kev || Object.fromEntries(DATA.filter(r => r.explotada_kev).map(r => [r.cve, {dueDate: r.kev_fecha_limite}]));
-    for (const cve of nuevos) {
-      if (cve.vulnStatus === "Rejected") continue;
-      const r = construir(cve, kevMap);
-      if (!r.fabricante) continue;
-      if (CONFIG.min_cvss && (r.cvss == null || r.cvss < CONFIG.min_cvss)) continue;
-      previos.set(r.cve, Object.assign(previos.get(r.cve) || {}, r));
+    const m = new Map(estado.data.map(r => [r.cve, r]));
+    const antes = new Set(m.keys());
+    nuevos.forEach(r => m.set(r.cve, Object.assign(m.get(r.cve) || {}, r)));
+    const cna = await detalleCNA(nuevos.map(r => r.cve));
+    nuevos.forEach(r => enriquecer(m.get(r.cve), cna[r.cve]));
+    for (const r of m.values()) {
+      const k = kev.map[r.cve];
+      r.explotada_kev = k ? "SÍ" : ""; r.kev_fecha_limite = k ? k.dueDate || "" : "";
+      r.nueva = !antes.has(r.cve);
     }
-    const corte = desdePeriodo.toISOString().slice(0, 10);
-    let lista = [...previos.values()].filter(r => r.publicado >= corte);
-    lista.forEach(r => { const k = kevMap[r.cve]; r.explotada_kev = k ? "SÍ" : ""; r.kev_fecha_limite = k ? k.dueDate || "" : ""; });
-    if (CONFIG.solo_kev) lista = lista.filter(r => r.explotada_kev);
 
-    const cna = await detalleCNA(lista.map(r => r.cve));
-    const antes = new Set(DATA.map(r => r.cve));
-    lista.forEach(r => { enriquecer(r, cna[r.cve]); r.nueva = !antes.has(r.cve); });
-
-    DATA = lista;
-    estado = {hasta: hasta.toISOString(), completa: completa ? hasta.toISOString() : estado.completa, data: DATA};
-    store.set(CLAVE, estado);
+    estado = {desde: estado.desde, hasta: hasta.toISOString(), completa: completa ? hasta.toISOString() : estado.completa, data: [...m.values()]};
+    guardar();
     render();
-    const n = lista.filter(r => !antes.has(r.cve)).length;
-    estadoTxt(n ? `${n} CVE${n>1?"s":""} nueva${n>1?"s":""}` : "Sin novedades");
-    if (!kev) estadoTxt($("estado").textContent + " · no se pudo consultar CISA KEV");
+    const n = nuevos.filter(r => !antes.has(r.cve)).length;
+    estadoTxt((n ? `${n} CVE${n>1?"s":""} nueva${n>1?"s":""}` : "Sin novedades") + (kev.ok ? "" : " · no se pudo consultar CISA KEV"));
   } catch (e) {
     console.error(e);
     estadoTxt(`Error al actualizar: ${e.message}. Se mantienen los datos anteriores.`);
   } finally {
-    actualizando = false;
-    $("refresh").disabled = false;
+    ocupado(false);
+    asegurarRango();
   }
 }
+
+// Histórico publicado junto al HTML (archivo.js): rangos largos al instante, sin consultar NVD.
+// Se carga como <script> y no con fetch() para que funcione también al abrir el HTML con doble clic.
+const cargarScript = src => new Promise((ok, mal) => {
+  const el = document.createElement("script");
+  el.src = src; el.onload = ok; el.onerror = () => mal(new Error("no se encontró " + src));
+  document.head.appendChild(el);
+});
+let archivoIntentado = false;
+async function cargarArchivo(){
+  if (archivoIntentado || !CONFIG.archivo) return;
+  archivoIntentado = true;
+  try {
+    estadoTxt("Cargando histórico…");
+    await cargarScript(`${CONFIG.archivo}?v=${encodeURIComponent(CONFIG.generado)}`);
+    const a = window.__ARCHIVO__;
+    if (!a || !Array.isArray(a.data)) throw new Error("histórico vacío");
+    const m = new Map(a.data.map(r => [r.cve, r]));
+    estado.data.forEach(r => m.set(r.cve, r));   // lo descargado en este navegador es más reciente
+    estado = {...estado, desde: a.desde < estado.desde ? a.desde : estado.desde, data: [...m.values()]};
+    estadoTxt("");
+  } catch (e) {
+    console.warn("No se pudo cargar el histórico; se usará NVD", e);
+  }
+}
+
+// Panel «Por periodo»: si la fecha elegida es anterior a lo que hay, carga el histórico o descarga solo el tramo que falta
+async function asegurarRango(){
+  if (vista !== "periodo" || actualizando || desdeSel >= isoDia(estado.desde)) return;
+  ocupado(true);
+  try {
+    await cargarArchivo();
+    if (desdeSel >= isoDia(estado.desde)) { render(); return; }
+    const kev = await cargarKEV();
+    const ini = new Date(desdeSel + "T00:00:00Z"), fin = new Date(estado.desde);
+    const corto = d => d.toLocaleDateString("es-ES",{day:"numeric",month:"short",year:"numeric"});
+    const brutos = [];
+    // NVD admite como máximo 120 días por consulta
+    for (let a = ini; a < fin; ) {
+      const b = new Date(Math.min(+a + 120 * 864e5, +fin));
+      brutos.push(...await descargarNVD(a, b, `${corto(a)} – ${corto(b)}`));
+      a = b;
+      if (a < fin) await espera(6500);
+    }
+    const nuevos = procesar(brutos, kev.map);
+    const cna = await detalleCNA(nuevos.map(r => r.cve));
+    nuevos.forEach(r => { enriquecer(r, cna[r.cve]); r.nueva = false; });
+    const m = new Map(estado.data.map(r => [r.cve, r]));
+    nuevos.forEach(r => { if (!m.has(r.cve)) m.set(r.cve, r); });
+    estado = {...estado, desde: ini.toISOString(), data: [...m.values()]};
+    guardar();
+    render();
+    estadoTxt(`Periodo cargado: ${nuevos.length} CVE${nuevos.length === 1 ? "" : "s"} más desde el ${fecha(desdeSel)}`);
+  } catch (e) {
+    console.error(e);
+    estadoTxt(`No se pudo cargar el periodo: ${e.message}. Vuelve a elegir la fecha para reintentarlo.`);
+  } finally {
+    ocupado(false);
+  }
+}
+
+function ponerVista(v){
+  vista = v;
+  store.set("vp-vista", v);
+  $("tab-rec").setAttribute("aria-selected", String(v === "recientes"));
+  $("tab-per").setAttribute("aria-selected", String(v === "periodo"));
+  $("range").hidden = v !== "periodo";
+  render();
+  asegurarRango();
+}
+function marcarPresets(){
+  document.querySelectorAll("#presets button").forEach(b => b.classList.toggle("on", haceDias(+b.dataset.d) === desdeSel));
+}
+function elegirDesde(fechaISO){
+  const min = haceDias(MAX_DIAS), max = isoDia(Date.now());
+  desdeSel = fechaISO < min ? min : fechaISO > max ? max : fechaISO;
+  store.set("vp-desde", desdeSel);
+  $("desde").value = desdeSel;
+  marcarPresets();
+  if (vista !== "periodo") return ponerVista("periodo");
+  render();
+  asegurarRango();
+}
+$("tab-rec").textContent = `Últimos ${CONFIG.dias} días`;
+$("tab-rec").onclick = () => ponerVista("recientes");
+$("tab-per").onclick = () => ponerVista("periodo");
+$("desde").min = haceDias(MAX_DIAS);
+$("desde").max = isoDia(Date.now());
+$("desde").value = desdeSel;
+$("desde").onchange = e => { if (e.target.value) elegirDesde(e.target.value); };
+document.querySelectorAll("#presets button").forEach(b => b.onclick = () => elegirDesde(haceDias(+b.dataset.d)));
+marcarPresets();
+$("tab-rec").setAttribute("aria-selected", String(vista === "recientes"));
+$("tab-per").setAttribute("aria-selected", String(vista === "periodo"));
+$("range").hidden = vista !== "periodo";
 
 // ---------------------------------------------------------------- botón y actualización automática
 $("refresh").onclick = actualizar;
@@ -956,28 +1226,91 @@ programar();
 render();
 // si los datos llevan más tiempo sin actualizarse que el intervalo elegido, actualiza al abrir
 const auto = Number($("auto").value);
-if (auto && Date.now() - new Date(estado.hasta) > auto * 60e3) actualizar();
+if (auto && Date.now() - new Date(estado.hasta) > auto * 60e3) actualizar(); else asegurarRango();
 </script>
 </body></html>
 """
 
 
-def guardar_html(res, ruta, dias, seleccion, min_cvss=0, solo_kev=False):
+def guardar_html(res, ruta, dias, seleccion, min_cvss=0, solo_kev=False, historico=None, archivo=None):
     def js(obj):  # JSON seguro para incrustar en <script>
         return json.dumps(obj, ensure_ascii=False).replace("</", "<\\/")
 
     # Lo que necesita el HTML para actualizarse solo desde el navegador
+    ahora = datetime.now(timezone.utc)
     config = {
         "dias": dias, "min_cvss": min_cvss, "solo_kev": solo_kev,
-        "generado": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+        "generado": ahora.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+        # periodo cubierto por los datos incluidos en el HTML
+        "cubre_desde": (ahora - timedelta(days=historico or dias)).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
         "fabricantes": {k: FABRICANTES[k] for k in seleccion},
         "traduccion": TRADUCCION,
         "nvd": NVD_URL, "cveorg": CVE_ORG_URL, "kev": KEV_URL_GITHUB,
     }
+    if archivo:
+        config["archivo"] = os.path.basename(archivo["ruta"])
+        config["archivo_desde"] = archivo["desde"]
     doc = PLANTILLA_HTML.replace("__DATA__", js(res)).replace("__CONFIG__", js(config))
     with open(ruta, "w", encoding="utf-8") as f:
         f.write(doc)
     print(f"HTML guardado en {ruta}", file=sys.stderr)
+
+
+# ----------------------------------------------------------------------------- archivo anual
+
+FMT_ISO = "%Y-%m-%dT%H:%M:%S.000Z"
+
+
+def actualizar_archivo(dias, hasta, recientes, desde_recientes, seleccion, kev, min_cvss, solo_kev, api_key,
+                       ruta_estado, ruta_cna):
+    """Mantiene un archivo con las CVEs de los fabricantes vigilados de los últimos `dias` días.
+
+    NVD no permite buscar por fabricante, así que hay que descargar todos los CVEs y filtrar. Eso se hace
+    una sola vez por tramo: el archivo se guarda y en cada ejecución solo se descarga el hueco que falte.
+    `recientes` son las CVEs ya calculadas en esta ejecución (desde `desde_recientes` hasta `hasta`).
+    """
+    estado = None
+    if ruta_estado and os.path.exists(ruta_estado):
+        try:
+            with open(ruta_estado, encoding="utf-8") as f:
+                estado = json.load(f)
+        except (OSError, ValueError):
+            estado = None
+    leer = lambda t: datetime.strptime(t, FMT_ISO).replace(tzinfo=timezone.utc)
+    inicio = hasta - timedelta(days=dias)
+    datos = {r["cve"]: r for r in (estado or {}).get("data", [])}
+    if estado:
+        huecos = [(inicio, leer(estado["desde"])), (leer(estado["hasta"]), desde_recientes)]
+    else:
+        huecos = [(inicio, desde_recientes)]
+    huecos = [(a, b) for a, b in huecos if b - a > timedelta(hours=1)]
+    pausa = 0.7 if api_key else 6.5
+    for a, fin in huecos:
+        print(f"Archivo: descargando {a:%Y-%m-%d} → {fin:%Y-%m-%d} (solo hace falta una vez)…", file=sys.stderr)
+        while a < fin:
+            b = min(a + timedelta(days=120), fin)   # NVD admite 120 días por consulta
+            brutos = descargar_nvd(a, b, api_key)
+            nuevos = filtrar(brutos, seleccion, kev, min_cvss)
+            if solo_kev:
+                nuevos = [r for r in nuevos if r["explotada_kev"]]
+            enriquecer(nuevos, {c["id"]: c for c in brutos}, ruta_cna)
+            for r in nuevos:
+                datos.setdefault(r["cve"], r)
+            a = b
+            time.sleep(pausa)
+    for r in recientes:  # lo de esta ejecución manda: tiene las puntuaciones y versiones más actuales
+        datos[r["cve"]] = r
+    corte = inicio.strftime("%Y-%m-%d")
+    lista = [r for r in datos.values() if r["publicado"] >= corte]
+    for r in lista:  # el estado de explotación (KEV) cambia con el tiempo
+        k = kev.get(r["cve"])
+        r["explotada_kev"] = "SÍ" if k else ""
+        r["kev_fecha_limite"] = k.get("dueDate", "") if k else ""
+    nuevo = {"desde": inicio.strftime(FMT_ISO), "hasta": hasta.strftime(FMT_ISO), "data": lista}
+    if ruta_estado:
+        with open(ruta_estado, "w", encoding="utf-8") as f:
+            json.dump(nuevo, f, ensure_ascii=False)
+    return nuevo
 
 
 # ----------------------------------------------------------------------------- main
@@ -995,10 +1328,17 @@ def main():
     p.add_argument("--html", help="guardar informe HTML")
     p.add_argument("--json", help="guardar resultado en JSON")
     p.add_argument("--sin-cache", action="store_true", help="ignorar la caché local y descargarlo todo de nuevo")
+    p.add_argument("--historico", type=int, default=30,
+                   help="días de historial que se incluyen en el HTML para el panel «Por periodo» (máx. 120). Por defecto 30")
+    p.add_argument("--archivo", type=int, default=0, metavar="DIAS",
+                   help="genera además archivo.js junto al HTML con los últimos DIAS días (p. ej. 365) para que el "
+                        "panel «Por periodo» cargue rangos largos al instante. La primera vez tarda; luego es incremental")
     a = p.parse_args()
 
     if not 1 <= a.dias <= 120:
         p.error("--dias debe estar entre 1 y 120 (límite de la API de NVD)")
+    if not 1 <= a.historico <= 120:
+        p.error("--historico debe estar entre 1 y 120")
     seleccion = [x.strip().lower() for x in a.fabricantes.split(",") if x.strip()] or list(FABRICANTES)
     desconocidos = [x for x in seleccion if x not in FABRICANTES]
     if desconocidos:
@@ -1011,19 +1351,37 @@ def main():
 
     kev = descargar_kev()
     ruta_cache = None if a.sin_cache else os.path.join(os.path.dirname(os.path.abspath(__file__)), ".cache_nvd.json")
-    cves = obtener_cves(desde, hasta, api_key, ruta_cache)
-    res = filtrar(cves, seleccion, kev, a.min_cvss)
+    # El HTML lleva además el historial de los últimos --historico días para el panel «Por periodo»
+    dias_html = max(a.dias, a.historico) if a.html else a.dias
+    cves = obtener_cves(hasta - timedelta(days=dias_html), hasta, api_key, ruta_cache)
+    todos = filtrar(cves, seleccion, kev, a.min_cvss)
     if a.solo_kev:
-        res = [r for r in res if r["explotada_kev"]]
+        todos = [r for r in todos if r["explotada_kev"]]
     carpeta = os.path.dirname(os.path.abspath(__file__))
-    enriquecer(res, {c["id"]: c for c in cves}, None if a.sin_cache else os.path.join(carpeta, ".cache_cna.json"))
+    enriquecer(todos, {c["id"]: c for c in cves}, None if a.sin_cache else os.path.join(carpeta, ".cache_cna.json"))
+    corte = desde.strftime("%Y-%m-%d")
+    res = [r for r in todos if r["publicado"] >= corte]
     kev_nuevos = kev_recientes(kev, desde, seleccion)
+
+    archivo = None
+    if a.html and a.archivo > dias_html:
+        ruta_cna = None if a.sin_cache else os.path.join(carpeta, ".cache_cna.json")
+        ruta_estado = None if a.sin_cache else os.path.join(carpeta, ".cache_archivo.json")
+        archivo = actualizar_archivo(a.archivo, hasta, todos, hasta - timedelta(days=dias_html), seleccion, kev,
+                                     a.min_cvss, a.solo_kev, api_key, ruta_estado, ruta_cna)
+        archivo["ruta"] = os.path.join(os.path.dirname(os.path.abspath(a.html)), "archivo.js")
+        with open(archivo["ruta"], "w", encoding="utf-8") as f:
+            f.write("window.__ARCHIVO__=")
+            json.dump({k: archivo[k] for k in ("desde", "hasta", "data")}, f, ensure_ascii=False, separators=(",", ":"))
+            f.write(";\n")
+        print(f"Archivo guardado en {archivo['ruta']} ({len(archivo['data'])} CVEs desde {archivo['desde'][:10]})",
+              file=sys.stderr)
 
     imprimir(res, kev_nuevos, a.dias)
     if a.csv:
         guardar_csv(res, a.csv)
     if a.html:
-        guardar_html(res, a.html, a.dias, seleccion, a.min_cvss, a.solo_kev)
+        guardar_html(todos, a.html, a.dias, seleccion, a.min_cvss, a.solo_kev, dias_html, archivo)
     if a.json:
         with open(a.json, "w", encoding="utf-8") as f:
             json.dump({"resultados": res, "kev_nuevos": kev_nuevos}, f, ensure_ascii=False, indent=2)

@@ -19,7 +19,7 @@ concurrency:
 jobs:
   generar:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 90       # la primera ejecución construye el archivo de 1 año; las siguientes tardan segundos
     steps:
       - uses: actions/checkout@v4
 
@@ -33,6 +33,7 @@ jobs:
           path: |
             .cache_nvd.json
             .cache_cna.json
+            .cache_archivo.json
           key: cache-vulns-${{ github.run_id }}
           restore-keys: cache-vulns-
 
@@ -41,7 +42,7 @@ jobs:
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}   # opcional: Settings > Secrets and variables > Actions
         run: |
           mkdir -p public
-          python vulns_perimetrales.py --dias 7 --html public/index.html --csv public/informe.csv
+          python vulns_perimetrales.py --dias 7 --historico 30 --archivo 365 --html public/index.html --csv public/informe.csv
 
       - uses: actions/upload-pages-artifact@v3
         with:

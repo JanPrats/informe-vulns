@@ -1,6 +1,8 @@
 # Cachés locales y resultados generados (los genera GitHub Actions)
 .cache_nvd.json
 .cache_cna.json
+.cache_archivo.json
+archivo.js
 informe.html
 informe.csv
 public/
