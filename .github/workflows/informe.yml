@@ -1,0 +1,58 @@
+name: Generar y publicar informe
+
+on:
+  schedule:
+    - cron: "0 5 * * *"     # todos los días a las 05:00 UTC (07:00 en Madrid en verano, 06:00 en invierno)
+  workflow_dispatch:         # botón "Run workflow" para lanzarlo a mano
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  generar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Reutiliza la caché de NVD/CVE.org entre ejecuciones para descargar solo lo nuevo
+      - uses: actions/cache@v4
+        with:
+          path: |
+            .cache_nvd.json
+            .cache_cna.json
+          key: cache-vulns-${{ github.run_id }}
+          restore-keys: cache-vulns-
+
+      - name: Generar informe
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}   # opcional: Settings > Secrets and variables > Actions
+        run: |
+          mkdir -p public
+          python vulns_perimetrales.py --dias 7 --html public/index.html --csv public/informe.csv
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  publicar:
+    needs: generar
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

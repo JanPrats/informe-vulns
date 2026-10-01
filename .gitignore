@@ -1,0 +1,7 @@
+# Cachés locales y resultados generados (los genera GitHub Actions)
+.cache_nvd.json
+.cache_cna.json
+informe.html
+informe.csv
+public/
+__pycache__/
