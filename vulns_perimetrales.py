@@ -634,10 +634,18 @@ h1 em{font-style:italic;color:var(--muted)}
 .flag.new{color:var(--fix);background:var(--fix-wash)}
 .excerpt{margin:6px 0 0;color:var(--text);font-size:14.5px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;max-width:72ch}
 .cve[open] .excerpt{display:none}
-.cright{display:flex;align-items:center;gap:14px;font:12px var(--f-body);color:var(--muted);white-space:nowrap;padding-top:4px}
+.cright{display:grid;grid-template-columns:auto auto;align-items:center;justify-items:end;gap:8px 14px;font:12px var(--f-body);color:var(--muted);white-space:nowrap;padding-top:4px}
 .plus{width:22px;height:22px;border:1px solid var(--rule-strong);border-radius:50%;display:grid;place-items:center;color:var(--muted);transition:transform .2s,border-color .2s}
 .cve>summary:hover .plus{border-color:var(--ink);color:var(--ink)}
 .cve[open] .plus{transform:rotate(45deg)}
+.copy{grid-column:2;width:22px;height:22px;border:1px solid var(--rule-strong);border-radius:50%;display:grid;place-items:center;
+  color:var(--muted);background:transparent;padding:0;cursor:pointer;position:relative;transition:border-color .2s,color .2s}
+.copy svg.i{width:12px;height:12px}
+.copy:hover{border-color:var(--ink);color:var(--ink)}
+.copy.ok{border-color:var(--fix);color:var(--fix)}
+.copy::after{content:attr(data-msg);position:absolute;right:30px;top:50%;transform:translateY(-50%);font:500 11.5px var(--f-body);
+  color:var(--sheet);background:var(--ink);padding:4px 8px;border-radius:6px;white-space:nowrap;opacity:0;pointer-events:none;transition:opacity .15s}
+.copy:hover::after,.copy.ok::after{opacity:1}
 
 .body{margin-left:112px;padding-bottom:30px;display:grid;gap:26px}
 .sec{display:grid;grid-template-columns:120px minmax(0,1fr);gap:20px}
@@ -783,6 +791,8 @@ $("theme").onclick = () => {
 const ICO = {
   ext:  '<path d="M7 17 17 7M8 7h9v9"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
+  copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/>',
+  ok:   '<path d="m5 12 5 5 9-10"/>',
 };
 const ico = k => `<svg class="i" viewBox="0 0 24 24">${ICO[k]}</svg>`;
 const extracto = t => t.trim().split(/(?<=\.)\s/)[0];
@@ -811,7 +821,8 @@ function bloque(r){
           ${r.nueva ? `<span class="flag new">Nueva</span>` : ""}</div>
         <p class="excerpt">${esc(extracto(r.descripcion))}</p>
       </div>
-      <div class="cright">${fecha(r.publicado)}<span class="plus">${ico("plus")}</span></div>
+      <div class="cright">${fecha(r.publicado)}<span class="plus">${ico("plus")}</span>
+        <button class="copy" type="button" data-copiar="${esc(r.cve)}" data-msg="Copiar resumen" aria-label="Copiar resumen de ${esc(r.cve)}">${ico("copy")}</button></div>
     </summary>
     <div class="body">
       <section class="sec"><h4>Descripción</h4><div><p class="desc">${esc(r.descripcion.trim())}</p></div></section>
@@ -868,6 +879,77 @@ function filtrar(){
   document.querySelectorAll(".vendor").forEach(v => v.hidden = !v.querySelector(".cve:not([hidden])"));
 }
 $("q").oninput = filtrar; $("kev").onchange = filtrar;
+
+// Copiar resumen de un CVE. Con formato (Outlook, Teams, Word) se pega así, con el nombre del aviso como enlace:
+//   FortiMail: CVE-2026-104286
+//   PSIRT | FortiGuard Labs   https://nvd.nist.gov/vuln/detail/CVE-2026-104286
+// En texto plano el aviso lleva además su dirección, para no perder el enlace.
+const PORTALES = {   // nombre del portal de avisos de cada fabricante, según el dominio del enlace
+  "fortiguard.fortinet.com": "PSIRT | FortiGuard Labs",
+  "security.paloaltonetworks.com": "Palo Alto Networks Security Advisories",
+  "sec.cloudapps.cisco.com": "Cisco Security Advisory",
+  "support.citrix.com": "Citrix Security Bulletin",
+  "psirt.watchguard.com": "WatchGuard PSIRT",
+  "support.checkpoint.com": "Check Point Security Advisory",
+  "psirt.global.sonicwall.com": "SonicWall PSIRT",
+  "supportportal.juniper.net": "Juniper Security Bulletin",
+  "my.f5.com": "F5 Security Advisory",
+  "hub.ivanti.com": "Ivanti Security Advisory",
+  "forums.ivanti.com": "Ivanti Security Advisory",
+  "www.sophos.com": "Sophos Security Advisory",
+  "www.zyxel.com": "Zyxel Security Advisory",
+  "advisories.stormshield.eu": "Stormshield Security Advisory",
+  "support.forcepoint.com": "Forcepoint Security Advisory",
+  "docs.netgate.com": "Netgate Security Advisory",
+  "docs.opnsense.org": "OPNsense Security Advisory",
+};
+function nombreAviso(r){
+  try { return PORTALES[new URL(r.aviso).hostname] || `Aviso de ${r.fabricante}`; }
+  catch (e) { return `Aviso de ${r.fabricante}`; }
+}
+function resumenCVE(r){
+  const titulo = `${r.producto}: ${r.cve}`;
+  const nombre = r.aviso ? nombreAviso(r) : "";
+  const texto = [titulo, r.aviso ? `${nombre} (${r.aviso})   ${r.url}` : r.url].join("\n");
+  const a = (u, t) => `<a href="${esc(u)}">${esc(t)}</a>`;
+  const htmlTxt = `<div style="font-family:Segoe UI,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.6">${esc(titulo)}<br>`
+    + (r.aviso ? `${a(r.aviso, nombre)}&nbsp;&nbsp;&nbsp;` : "") + `${a(r.url, r.url)}</div>`;
+  return {texto, htmlTxt};
+}
+async function copiar({texto, htmlTxt}){
+  try {
+    if (window.ClipboardItem && navigator.clipboard?.write) {
+      await navigator.clipboard.write([new ClipboardItem({
+        "text/plain": new Blob([texto], {type: "text/plain"}),
+        "text/html": new Blob([htmlTxt], {type: "text/html"}),
+      })]);
+      return true;
+    }
+    await navigator.clipboard.writeText(texto);
+    return true;
+  } catch (e) {
+    // plan B: copia clásica con un cuadro de texto temporal
+    const t = document.createElement("textarea");
+    t.value = texto; t.style.position = "fixed"; t.style.opacity = "0";
+    document.body.appendChild(t); t.select();
+    const ok = document.execCommand("copy");
+    t.remove();
+    return ok;
+  }
+}
+$("main").addEventListener("click", async ev => {
+  const b = ev.target.closest(".copy");
+  if (!b) return;
+  ev.preventDefault(); ev.stopPropagation();   // que no abra/cierre el CVE
+  const r = estado.data.find(x => x.cve === b.dataset.copiar);
+  if (!r) return;
+  const ok = await copiar(resumenCVE(r));
+  b.classList.toggle("ok", ok);
+  b.dataset.msg = ok ? "Copiado" : "No se pudo copiar";
+  b.innerHTML = ico(ok ? "ok" : "copy");
+  clearTimeout(b._t);
+  b._t = setTimeout(() => { b.classList.remove("ok"); b.dataset.msg = "Copiar resumen"; b.innerHTML = ico("copy"); }, 1800);
+});
 let abierto = false;
 $("toggle").onclick = () => { abierto = !abierto; document.querySelectorAll(".cve").forEach(d => d.open = abierto);
   $("toggle").textContent = abierto ? "Contraer todo" : "Expandir todo"; };
