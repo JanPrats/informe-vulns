@@ -100,38 +100,65 @@ def vp_extracto(texto, maximo=220):
 
 
 def cuerpo_html(nuevas, url):
+    """HTML compatible con Outlook de escritorio (motor de Word): solo tablas de ancho fijo, estilos en
+    línea en cada celda y botón hecho con una celda de color. Nada de max-width, margin ni padding en <div>/<span>."""
     e = html.escape
+    fuente = "font-family:'Segoe UI',Helvetica,Arial,sans-serif;"
     filas = []
-    for r in nuevas:
+    for i, r in enumerate(nuevas):
         sev = r["severidad"] if r["severidad"] in SEV_ES else "NONE"
         color = SEV_COLOR.get(sev, "#6b7280")
-        score = f"{r['cvss']:.1f}" if r["cvss"] is not None else "—"
-        kev = ('<span style="display:inline-block;margin-left:8px;padding:2px 8px;border-radius:999px;'
-               'background:#fef2f2;color:#dc2626;font-size:11px;font-weight:600;letter-spacing:.06em">EXPLOTADA</span>'
-               if r["explotada_kev"] else "")
+        score = f"{r['cvss']:.1f}" if r["cvss"] is not None else "&mdash;"
+        borde = "border-top:1px solid #e5e7eb;" if i else ""
+        kev = ('&nbsp;&nbsp;<span style="color:#dc2626;font-size:11px;font-weight:bold;letter-spacing:1px;">'
+               '&#9679;&nbsp;EXPLOTADA</span>' if r["explotada_kev"] else "")
         fixes = versiones_arreglo(r)
-        fix = (f'<div style="margin-top:6px;font-size:13px;color:#374151">Actualizar a: '
-               f'<b style="color:#047857">{e(", ".join(fixes))}</b></div>') if fixes else ""
+        fix = (f'<tr><td style="{fuente}font-size:13px;color:#374151;padding-top:8px;">Actualizar a: '
+               f'<b style="color:#047857;">{e(", ".join(fixes))}</b></td></tr>') if fixes else ""
         filas.append(f"""
-        <tr><td style="padding:16px 0;border-top:1px solid #e5e7eb;vertical-align:top;width:64px">
-              <div style="font-size:22px;font-weight:600;color:{color};line-height:1">{score}</div>
-              <div style="font-size:10px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:{color};margin-top:4px">{e(SEV_ES.get(sev, 'Sin puntuar'))}</div></td>
-            <td style="padding:16px 0 16px 12px;border-top:1px solid #e5e7eb;vertical-align:top">
-              <div><a href="{e(r['url'])}" style="color:#111827;font-weight:600;font-size:15px;text-decoration:none">{e(r['cve'])}</a>{kev}</div>
-              <div style="font-size:13px;color:#6b7280;margin-top:2px">{e(r['fabricante'])} · {e(r['producto'])}</div>
-              <div style="font-size:14px;color:#374151;margin-top:6px;line-height:1.5">{e(vp_extracto(r['descripcion']))}</div>
-              {fix}</td></tr>""")
-    boton = (f'<p style="margin:24px 0 0"><a href="{e(url)}" style="display:inline-block;background:#111827;color:#ffffff;'
-             f'padding:10px 18px;border-radius:999px;text-decoration:none;font-size:14px">Ver el informe completo</a></p>') if url else ""
-    return f"""<!doctype html><html><head><meta charset="utf-8"></head><body style="margin:0;background:#f7f8fa;padding:24px 16px;font-family:-apple-system,'Segoe UI',Helvetica,Arial,sans-serif">
-  <div style="max-width:640px;margin:0 auto;background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;padding:28px">
-    <div style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#6b7280">Seguridad perimetral</div>
-    <h1 style="font-family:Georgia,'Times New Roman',serif;font-weight:400;font-size:28px;color:#111827;margin:8px 0 4px">
-      {len(nuevas)} vulnerabilidad{'es' if len(nuevas) != 1 else ''} nueva{'s' if len(nuevas) != 1 else ''}</h1>
-    <table role="presentation" style="width:100%;border-collapse:collapse;margin-top:12px">{''.join(filas)}</table>
-    {boton}
-  </div>
-  <p style="max-width:640px;margin:12px auto 0;font-size:12px;color:#9ca3af;text-align:center">Fuentes: NVD, CVE.org y CISA KEV</p>
+        <tr>
+          <td width="70" valign="top" style="{fuente}{borde}padding:18px 0;width:70px;">
+            <div style="font-size:22px;font-weight:bold;color:{color};line-height:24px;">{score}</div>
+            <div style="font-size:10px;font-weight:bold;letter-spacing:1px;text-transform:uppercase;color:{color};line-height:16px;">{e(SEV_ES.get(sev, 'Sin puntuar'))}</div>
+          </td>
+          <td valign="top" style="{fuente}{borde}padding:18px 0;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+              <tr><td style="{fuente}font-size:15px;line-height:22px;"><a href="{e(r['url'])}" style="color:#111827;font-weight:bold;text-decoration:none;">{e(r['cve'])}</a>{kev}</td></tr>
+              <tr><td style="{fuente}font-size:13px;line-height:20px;color:#6b7280;">{e(r['fabricante'])} &middot; {e(r['producto'])}</td></tr>
+              <tr><td style="{fuente}font-size:14px;line-height:21px;color:#374151;padding-top:6px;">{e(vp_extracto(r['descripcion']))}</td></tr>
+              {fix}
+            </table>
+          </td>
+        </tr>""")
+    boton = f"""
+        <tr><td colspan="2" style="padding-top:24px;">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
+            <td bgcolor="#111827" style="background-color:#111827;border-radius:20px;padding:11px 20px;{fuente}">
+              <a href="{e(url)}" style="color:#ffffff;font-size:14px;text-decoration:none;font-weight:bold;">Ver el informe completo</a>
+            </td></tr></table>
+        </td></tr>""" if url else ""
+    n = len(nuevas)
+    titulo = f"{n} vulnerabilidad{'es' if n != 1 else ''} nueva{'s' if n != 1 else ''}"
+    return f"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background-color:#f3f4f6;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f3f4f6" style="background-color:#f3f4f6;">
+  <tr><td align="center" style="padding:24px 12px;">
+    <table role="presentation" width="640" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff"
+           style="width:640px;max-width:640px;background-color:#ffffff;border:1px solid #e5e7eb;">
+      <tr><td style="padding:28px 32px 8px 32px;{fuente}">
+        <div style="font-size:11px;letter-spacing:2px;text-transform:uppercase;color:#6b7280;">Seguridad perimetral</div>
+        <div style="font-family:Georgia,'Times New Roman',serif;font-size:28px;line-height:36px;color:#111827;padding-top:6px;">{titulo}</div>
+      </td></tr>
+      <tr><td style="padding:8px 32px 32px 32px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">{''.join(filas)}{boton}
+        </table>
+      </td></tr>
+    </table>
+    <table role="presentation" width="640" cellpadding="0" cellspacing="0" border="0" style="width:640px;max-width:640px;">
+      <tr><td align="center" style="padding-top:12px;{fuente}font-size:12px;color:#9ca3af;">Fuentes: NVD, CVE.org y CISA KEV</td></tr>
+    </table>
+  </td></tr>
+</table>
 </body></html>"""
 
 
