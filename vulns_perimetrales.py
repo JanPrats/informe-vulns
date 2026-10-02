@@ -42,10 +42,12 @@ FABRICANTES = {
                     "texto": ["pan-os", "globalprotect", "palo alto networks", "prisma access"]},
     "fortinet":    {"nombre": "Fortinet", "cpe": ["fortinet"],
                     "texto": ["fortios", "fortigate", "fortiproxy", "fortiweb", "fortimanager", "fortianalyzer",
-                              "fortisiem", "fortiswitch", "fortiadc", "fortinet"]},
+                              "fortisiem", "fortiswitch", "fortiadc", "fortisase", "forticlientems", "forticlient ems",
+                              "fortinet"]},
     "cisco":       {"nombre": "Cisco", "cpe": [],
                     "texto": ["adaptive security appliance", "cisco asa", "firepower", "secure firewall",
-                              "cisco ise", "identity services engine", "anyconnect"]},
+                              "cisco ise", "identity services engine", "anyconnect",
+                              "cisco sd-wan", "catalyst sd-wan", "sd-wan manager", "vmanage", "meraki mx"]},
     "checkpoint":  {"nombre": "Check Point", "cpe": ["checkpoint"],
                     "texto": ["check point", "gaia os", "quantum security gateway"]},
     "sonicwall":   {"nombre": "SonicWall", "cpe": ["sonicwall"],
@@ -56,8 +58,6 @@ FABRICANTES = {
                     "texto": ["big-ip", "f5 networks", "nginx plus"]},
     "citrix":      {"nombre": "Citrix", "cpe": ["citrix"],
                     "texto": ["netscaler", "citrix adc", "citrix gateway"]},
-    "ivanti":      {"nombre": "Ivanti", "cpe": ["ivanti", "pulsesecure"],
-                    "texto": ["connect secure", "policy secure", "pulse secure", "ivanti neurons for zta"]},
     "sophos":      {"nombre": "Sophos", "cpe": ["sophos"],
                     "texto": ["sophos firewall", "sophos xg", "sophos utm"]},
     "watchguard":  {"nombre": "WatchGuard", "cpe": ["watchguard"],
@@ -70,16 +70,20 @@ FABRICANTES = {
                     "texto": ["forcepoint"]},
     "stormshield": {"nombre": "Stormshield", "cpe": ["stormshield"],
                     "texto": ["stormshield"]},
-    "array":       {"nombre": "Array Networks", "cpe": ["arraynetworks"],
-                    "texto": ["array networks"]},
     "hillstone":   {"nombre": "Hillstone Networks", "cpe": ["hillstonenet"],
                     "texto": ["hillstone"]},
     "sangfor":     {"nombre": "Sangfor", "cpe": ["sangfor"],
                     "texto": ["sangfor"]},
-    "netgate":     {"nombre": "Netgate", "cpe": ["netgate", "pfsense"],
-                    "texto": ["pfsense", "netgate"]},
-    "opnsense":    {"nombre": "OPNsense", "cpe": ["opnsense"],
-                    "texto": ["opnsense"]},
+    # SASE / Zero Trust
+    "zscaler":     {"nombre": "Zscaler", "cpe": ["zscaler"],
+                    "texto": ["zscaler"]},
+    "netskope":    {"nombre": "Netskope", "cpe": ["netskope"],
+                    "texto": ["netskope"]},
+    "cato":        {"nombre": "Cato Networks", "cpe": ["catonetworks", "cato_networks"],
+                    "texto": ["cato networks"]},
+    # de Cloudflare solo la parte Zero Trust (no Workers, CDN, etc.)
+    "cloudflare":  {"nombre": "Cloudflare", "cpe": [],
+                    "texto": ["cloudflare warp", "cloudflared", "cloudflare zero trust", "cloudflare one"]},
 }
 
 # Nombres antiguos (con productos o varias marcas juntas) -> solo la marca. Sirve para actualizar lo ya guardado.
@@ -94,7 +98,7 @@ NOMBRES_ANTIGUOS = {
 
 def marca_actual(r):
     """Nombre de fabricante vigente para un registro guardado con un nombre antiguo."""
-    claves = NOMBRES_ANTIGUOS.get(r.get("fabricante"))
+    claves = [k for k in NOMBRES_ANTIGUOS.get(r.get("fabricante"), []) if k in FABRICANTES]
     if not claves:
         return r.get("fabricante")
     texto = " ".join([r.get("descripcion", ""), r.get("producto", ""), r.get("aviso", "")]).lower()
@@ -142,8 +146,9 @@ def http_json(url, headers=None, intentos=4, etiqueta=""):
             time.sleep(espera)
 
 
-def descargar_nvd(desde, hasta, api_key=None):
-    """Descarga todos los CVEs publicados entre desde y hasta (máx. 120 días por consulta)."""
+def descargar_nvd(desde, hasta, api_key=None, palabra=None):
+    """Descarga los CVEs publicados entre desde y hasta (máx. 120 días por consulta).
+    Con `palabra`, solo los que contienen esa frase exacta en la descripción (búsqueda mucho más ligera)."""
     headers = {"apiKey": api_key} if api_key else {}
     pausa = 0.7 if api_key else 6.5  # límites públicos: 50 req/30s con key, 5 req/30s sin key
     fmt = "%Y-%m-%dT%H:%M:%S.000Z"
@@ -151,8 +156,11 @@ def descargar_nvd(desde, hasta, api_key=None):
     while True:
         params = {"pubStartDate": desde.strftime(fmt), "pubEndDate": hasta.strftime(fmt),
                   "resultsPerPage": 2000, "startIndex": start}
+        if palabra:
+            params["keywordSearch"] = palabra
         pagina = f"NVD página {start // 2000 + 1}" + (f"/{-(-total // 2000)}" if total else "")
-        data = http_json(f"{NVD_URL}?{urllib.parse.urlencode(params)}", headers, etiqueta=pagina)
+        url = f"{NVD_URL}?{urllib.parse.urlencode(params)}" + ("&keywordExactMatch" if palabra else "")
+        data = http_json(url, headers, etiqueta=pagina)
         lote = data.get("vulnerabilities", [])
         cves.extend(reducir(v["cve"]) for v in lote)
         total = data.get("totalResults", 0)
@@ -718,10 +726,6 @@ h1 em{font-style:italic;color:var(--muted)}
 .search:focus-within{border-color:var(--ink);color:var(--ink)}
 .search input{flex:1;min-width:0;border:0;background:transparent;font:inherit;font-size:14.5px;color:var(--ink);outline:none}
 .search input::placeholder{color:var(--faint)}
-.opt{display:inline-flex;align-items:center;gap:8px;font-size:13.5px;color:var(--text);cursor:pointer;user-select:none}
-.opt input{appearance:none;margin:0;width:15px;height:15px;border:1px solid var(--rule-strong);border-radius:4px;display:grid;place-items:center;cursor:pointer;background:var(--sheet)}
-.opt input:checked{background:var(--exploit);border-color:var(--exploit)}
-.opt input:checked::after{content:"";width:7px;height:4px;border:1.6px solid #fff;border-top:0;border-right:0;transform:rotate(-45deg) translate(1px,-1px)}
 .link{background:none;border:0;padding:0;font:inherit;font-size:13.5px;color:var(--text);cursor:pointer;text-decoration:underline;text-decoration-color:var(--rule-strong);text-underline-offset:4px}
 .link:hover{color:var(--ink);text-decoration-color:var(--ink)}
 /* Mis fabricantes: lista desplegable discreta */
@@ -852,9 +856,9 @@ footer{padding-block:40px 64px;display:flex;justify-content:space-between;gap:16
   /* barra de herramientas: no fija (ocuparía media pantalla) y ordenada en cuadrícula */
   .tools{position:static;backdrop-filter:none}
   .tb{display:grid;grid-template-columns:1fr 1fr;gap:14px 16px;align-items:center}
-  .tb>*{justify-self:start}
+  .tb>*{justify-self:center}
   .tb>.search{grid-column:1/-1;justify-self:stretch}
-  .go{justify-self:end}
+  .tb>.go{grid-column:1/-1;justify-self:stretch;justify-content:center;padding-block:10px}
   .tb{position:relative}
   .mf{position:static}
   .mf-panel{left:0;right:0;width:auto;top:calc(100% + 4px)}
@@ -891,7 +895,6 @@ footer{padding-block:40px 64px;display:flex;justify-content:space-between;gap:16
   <div class="tb">
     <label class="search"><svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
       <input type="search" id="q" placeholder="Buscar por CVE, producto o versión" autocomplete="off"></label>
-    <label class="opt"><input type="checkbox" id="kev"> Solo explotadas</label>
     <span class="mf">
       <button class="link" id="mf-btn" aria-expanded="false" aria-controls="mf-panel">Mis fabricantes</button>
       <div class="mf-panel" id="mf-panel" hidden>
@@ -1131,12 +1134,12 @@ function render(){
 
 // filtros
 function filtrar(){
-  const q = $("q").value.toLowerCase().trim(), soloKev = $("kev").checked;
-  document.querySelectorAll(".cve").forEach(d => d.hidden = (soloKev && d.dataset.kev !== "1") || (q && !d.dataset.q.includes(q)));
+  const q = $("q").value.toLowerCase().trim();
+  document.querySelectorAll(".cve").forEach(d => d.hidden = !!q && !d.dataset.q.includes(q));
   document.querySelectorAll(".product").forEach(p => p.hidden = !p.querySelector(".cve:not([hidden])"));
   document.querySelectorAll(".vendor").forEach(v => v.hidden = !v.querySelector(".cve:not([hidden])"));
 }
-$("q").oninput = filtrar; $("kev").onchange = filtrar;
+$("q").oninput = filtrar;
 
 // ---------- Mis fabricantes
 const nombresFab = Object.values(CONFIG.fabricantes).map(f => f.nombre).sort((a, b) => a.localeCompare(b, "es"));
@@ -1247,7 +1250,7 @@ async function abrirDesdeEnlace(){
   if (!r && CONFIG.archivo) { await cargarArchivo(); r = estado.data.find(x => x.cve === id); }
   if (!r) { estadoTxt(`${id} no está en el informe del último año.`); return; }
   forzada = id;
-  $("q").value = ""; $("kev").checked = false;
+  $("q").value = "";
   if (r.publicado < corteVista()) elegirDesde(r.publicado); else render();
   const d = document.querySelector(`.cve[data-id="${id}"]`);
   if (!d) return;
@@ -1270,9 +1273,9 @@ $("main").addEventListener("click", async e => {
 
 // ---------- Exportar a Excel (CSV con separador «;» y BOM, que Excel abre directamente)
 $("export").onclick = () => {
-  const q = $("q").value.toLowerCase().trim(), soloKev = $("kev").checked;
+  const q = $("q").value.toLowerCase().trim();
   const filas = datosVista()
-    .filter(r => (!soloKev || r.explotada_kev) &&
+    .filter(r =>
       (!q || [r.cve, r.fabricante, r.producto, r.descripcion, r.cwe, r.versiones.map(v => v.afectadas + " " + v.corregida).join(" ")].join(" ").toLowerCase().includes(q)))
     .sort((a, b) => a.fabricante.localeCompare(b.fabricante) || a.producto.localeCompare(b.producto) || prio(b) - prio(a));
   const cab = ["Fabricante","Producto","CVE","CVSS","Severidad","Explotada (CISA KEV)","Prob. explotación EPSS (%)","Publicada",
@@ -1314,7 +1317,10 @@ const PORTALES = {   // nombre del portal de avisos de cada fabricante, según e
   "advisories.stormshield.eu": "Stormshield Security Advisory",
   "support.forcepoint.com": "Forcepoint Security Advisory",
   "docs.netgate.com": "Netgate Security Advisory",
-  "docs.opnsense.org": "OPNsense Security Advisory",
+  "trust.zscaler.com": "Zscaler Security Advisory",
+  "www.netskope.com": "Netskope Security Advisory",
+  "support.catonetworks.com": "Cato Networks Security Advisory",
+  "documentation.meraki.com": "Cisco Meraki Security Advisory",
 };
 function nombreAviso(r){
   try { return PORTALES[new URL(r.aviso).hostname] || `Aviso de ${r.fabricante}`; }
@@ -1771,6 +1777,15 @@ def guardar_html(res, ruta, dias, seleccion, min_cvss=0, solo_kev=False, histori
 FMT_ISO = "%Y-%m-%dT%H:%M:%S.000Z"
 
 
+# Palabras clave añadidas en octubre de 2026 (para completar su histórico la primera vez)
+PALABRAS_ANADIDAS = {
+    "fortinet": ["fortisase", "forticlientems", "forticlient ems"],
+    "cisco": ["cisco sd-wan", "catalyst sd-wan", "sd-wan manager", "vmanage", "meraki mx"],
+    "zscaler": ["zscaler"], "netskope": ["netskope"], "cato": ["cato networks"],
+    "cloudflare": ["cloudflare warp", "cloudflared", "cloudflare zero trust", "cloudflare one"],
+}
+
+
 def actualizar_archivo(dias, hasta, recientes, desde_recientes, seleccion, kev, min_cvss, solo_kev, api_key,
                        ruta_estado, ruta_cna):
     """Mantiene un archivo con las CVEs de los fabricantes vigilados de los últimos `dias` días.
@@ -1791,6 +1806,9 @@ def actualizar_archivo(dias, hasta, recientes, desde_recientes, seleccion, kev, 
     datos = {r["cve"]: r for r in (estado or {}).get("data", [])}
     for r in datos.values():
         r["fabricante"] = marca_actual(r)
+    # fuera lo de fabricantes que ya no se vigilan
+    vigentes = {FABRICANTES[k]["nombre"] for k in seleccion}
+    datos = {c: r for c, r in datos.items() if r["fabricante"] in vigentes}
     if estado:
         huecos = [(inicio, leer(estado["desde"])), (leer(estado["hasta"]), desde_recientes)]
     else:
@@ -1810,6 +1828,33 @@ def actualizar_archivo(dias, hasta, recientes, desde_recientes, seleccion, kev, 
                 datos.setdefault(r["cve"], r)
             a = b
             time.sleep(pausa)
+    # Fabricantes o palabras clave nuevos: se busca en NVD solo por esas palabras para completar su histórico
+    palabras = {k: list(FABRICANTES[k]["texto"]) for k in seleccion}
+    previas = (estado or {}).get("palabras")
+    if estado and previas is None:   # histórico de antes de guardar las palabras: se compara con la lista anterior
+        previas = {k: [w for w in v if w not in PALABRAS_ANADIDAS.get(k, [])] for k, v in palabras.items()}
+    nuevas = [(k, w) for k, v in palabras.items() for w in v if estado and w not in (previas or {}).get(k, [])]
+    fin = desde_recientes
+    if nuevas and inicio < fin:
+        print(f"Archivo: completando el histórico de {len(nuevas)} búsquedas nuevas "
+              f"({', '.join(w for _, w in nuevas)})…", file=sys.stderr)
+        brutos = {}
+        for k, w in nuevas:
+            a = inicio
+            while a < fin:
+                b = min(a + timedelta(days=120), fin)
+                for c in descargar_nvd(a, b, api_key, palabra=w):
+                    brutos[c["id"]] = c
+                a = b
+                time.sleep(pausa)
+        nuevos = [r for r in filtrar(list(brutos.values()), seleccion, kev, min_cvss) if r["cve"] not in datos]
+        if solo_kev:
+            nuevos = [r for r in nuevos if r["explotada_kev"]]
+        enriquecer(nuevos, brutos, ruta_cna)
+        for r in nuevos:
+            datos[r["cve"]] = r
+        print(f"Archivo: {len(nuevos)} CVEs añadidas de los fabricantes/productos nuevos", file=sys.stderr)
+
     for r in recientes:  # lo de esta ejecución manda: tiene las puntuaciones y versiones más actuales
         datos[r["cve"]] = r
     corte = inicio.strftime("%Y-%m-%d")
@@ -1818,7 +1863,7 @@ def actualizar_archivo(dias, hasta, recientes, desde_recientes, seleccion, kev, 
         k = kev.get(r["cve"])
         r["explotada_kev"] = "SÍ" if k else ""
         r["kev_fecha_limite"] = k.get("dueDate", "") if k else ""
-    nuevo = {"desde": inicio.strftime(FMT_ISO), "hasta": hasta.strftime(FMT_ISO), "data": lista}
+    nuevo = {"desde": inicio.strftime(FMT_ISO), "hasta": hasta.strftime(FMT_ISO), "data": lista, "palabras": palabras}
     if ruta_estado:
         with open(ruta_estado, "w", encoding="utf-8") as f:
             json.dump(nuevo, f, ensure_ascii=False)
