@@ -1,0 +1,49 @@
+name: Avisos por correo de CVEs nuevas
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"   # cada 15 minutos (GitHub puede retrasarlo unos minutos en horas punta)
+  workflow_dispatch:
+    inputs:
+      probar:
+        description: "Enviar un correo de prueba con las 3 CVEs más recientes"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: avisos
+  cancel-in-progress: false
+
+jobs:
+  avisar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Recuerda qué CVEs ya se avisaron y la caché de NVD entre ejecuciones.
+      # Solo se guarda si la ejecución termina bien: si el correo falla, se reintenta en la siguiente.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            .estado_avisos.json
+            .cache_nvd_avisos.json
+            .cache_cna.json
+          key: avisos-${{ github.run_id }}
+          restore-keys: avisos-
+
+      - name: Comprobar CVEs nuevas y avisar
+        env:
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          AVISO_PARA: ${{ secrets.AVISO_PARA }}
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+          INFORME_URL: https://janprats.github.io/informe-vulns/
+        run: python avisos.py ${{ inputs.probar && '--probar' || '' }}

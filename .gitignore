@@ -7,3 +7,5 @@ informe.html
 informe.csv
 public/
 __pycache__/
+.estado_avisos.json
+.cache_nvd_avisos.json

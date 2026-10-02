@@ -151,7 +151,7 @@ CAMPOS_CPE = ("criteria", "vulnerable", "versionStartIncluding", "versionStartEx
 VERSION_CACHE = 2  # súbelo si cambia lo que guarda reducir()
 
 
-def obtener_cves(desde, hasta, api_key, ruta_cache):
+def obtener_cves(desde, hasta, api_key, ruta_cache, max_dias=120):
     """Usa una caché local: en ejecuciones posteriores solo descarga lo publicado desde la última vez."""
     cache = None
     if ruta_cache and os.path.exists(ruta_cache):
@@ -181,8 +181,8 @@ def obtener_cves(desde, hasta, api_key, ruta_cache):
     else:
         cves = {c["id"]: c for c in descargar_nvd(desde, hasta, api_key)}
         desde_cache = desde
-    # Mantenemos como mucho 120 días en caché
-    limite = max(desde_cache, hasta - timedelta(days=120))
+    # Mantenemos como mucho `max_dias` días en caché
+    limite = max(desde_cache, hasta - timedelta(days=max_dias))
     cves = {k: c for k, c in cves.items() if c["published"] >= limite.strftime("%Y-%m-%dT%H:%M:%S")}
     if ruta_cache:
         with open(ruta_cache, "w", encoding="utf-8") as f:
