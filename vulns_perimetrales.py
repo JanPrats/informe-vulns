@@ -727,6 +727,11 @@ table.vtable{border-collapse:collapse;width:100%;font-size:13.5px;background:var
 .vtable td.mono{white-space:nowrap}
 .vtable td.fx{color:var(--fix);font-weight:600}
 .vtable td.fx::before{content:"↑ ";color:var(--fix)}
+.vtable td.lista{white-space:normal;line-height:1.7;min-width:220px}
+.vtable td.aviso{white-space:nowrap}
+.vtable th{white-space:nowrap}
+.vtable td.aviso a{color:var(--muted);text-decoration:underline;text-decoration-color:var(--rule-strong);text-underline-offset:3px}
+.vtable td.aviso a:hover{color:var(--ink)}
 .nota{margin:12px 0 0;font-size:13.5px;color:var(--muted);max-width:68ch}
 .nota b{color:var(--ink);font-weight:600}
 /* ¿Me afecta? */
@@ -734,7 +739,7 @@ table.vtable{border-collapse:collapse;width:100%;font-size:13.5px;background:var
 .check input{font:inherit;font-size:13.5px;color:var(--ink);background:var(--sheet);border:1px solid var(--rule-strong);border-radius:999px;padding:5px 12px;width:150px}
 .check input:focus{outline:none;border-color:var(--ink)}
 .check output{font-weight:500;color:var(--text)}
-.check output.si{color:var(--exploit)} .check output.no{color:var(--fix)}
+.check output.si{color:var(--exploit)} .check output.no{color:var(--fix)} .check output.nd{color:var(--med)}
 /* enlace directo: resalta un momento la CVE abierta */
 .cve.foco{animation:foco 2.6s ease-out}
 @keyframes foco{0%,45%{background:var(--wash)}100%{background:transparent}}
@@ -916,6 +921,26 @@ function notasSolucion(r){
   }).join("");
 }
 
+// Filas de la tabla de versiones. Si el fabricante da una lista de versiones sueltas (p. ej. Cisco), se agrupan
+// en una fila por producto. «Consultar aviso» no es una versión: se muestra como enlace discreto al aviso.
+function filasVersiones(r){
+  const celdaArreglo = c => c === "Consultar aviso"
+    ? `<td class="aviso">${r.aviso ? `<a href="${esc(r.aviso)}" target="_blank" rel="noopener">Ver aviso</a>` : "Ver aviso"}</td>`
+    : `<td class="mono fx">${esc(c)}</td>`;
+  const grupos = [];
+  for (const v of r.versiones) {
+    const suelta = !!rango(v.afectadas).exacta;
+    const g = suelta && grupos.find(x => x.suelta && x.producto === v.producto && x.corregida === v.corregida);
+    if (g) g.lista.push(v.afectadas);
+    else grupos.push({producto: v.producto, corregida: v.corregida, suelta, lista: [v.afectadas]});
+  }
+  return grupos.map(g => `<tr><td>${esc(g.producto)}</td>` +
+    (g.lista.length > 1
+      ? `<td class="lista">${esc([...g.lista].sort((a, b) => comparar(numeros(a), numeros(b))).join(", "))}</td>`
+      : `<td class="mono">${esc(g.lista[0])}</td>`) +
+    celdaArreglo(g.corregida) + `</tr>`).join("");
+}
+
 function bloque(r){
   const s = sk(r.severidad);
   const epss = r.epss != null
@@ -929,7 +954,7 @@ function bloque(r){
   const cond = r.condiciones.length ? `<p class="cond"><b>Condiciones.</b> ${esc(r.condiciones.join(" "))}</p>` : "";
   const vers = r.versiones.length
     ? `<div class="tblwrap"><table class="vtable"><thead><tr><th>Producto</th><th>Versiones afectadas</th><th>Actualizar a</th></tr></thead><tbody>${
-        r.versiones.map(v => `<tr><td>${esc(v.producto)}</td><td class="mono">${esc(v.afectadas)}</td><td class="mono fx">${esc(v.corregida)}</td></tr>`).join("")
+        filasVersiones(r)
       }</tbody></table></div>`
     : `<p class="nota">Sin datos de versiones estructurados. Consulta el aviso del fabricante.</p>`;
   const check = r.versiones.length
@@ -1024,7 +1049,17 @@ document.addEventListener("keydown", e => { if (e.key === "Escape") abrirMF(fals
 pintarMF();
 
 // ---------- ¿Me afecta? Compara la versión escrita con los rangos de la tabla de versiones
-const numeros = t => (String(t).match(/\d+/g) || []).map(Number);
+// Normaliza la versión a una lista de números para que formas distintas de escribirla coincidan:
+//   «3.2.0 p7» = «3.2 Patch 7» = [3,2,7]   ·   «3.4.0» = «3.4» = [3,4]   ·   «14.1-73.37» = [14,1,73,37]
+function numeros(t){
+  t = String(t);
+  const m = t.match(/^(.*?)(?:^|[\s._-])p(?:atch)?\s*\.?\s*(\d+)\b/i);
+  let base, parche = [];
+  if (m && /\d/.test(m[1])) { base = (m[1].match(/\d+/g) || []).map(Number); parche = [Number(m[2])]; }
+  else base = (t.match(/\d+/g) || []).map(Number);
+  while (base.length > 1 && base[base.length - 1] === 0) base.pop();
+  return base.concat(parche);
+}
 function comparar(a, b){
   for (let i = 0; i < Math.max(a.length, b.length); i++) {
     const x = a[i] ?? -1, y = b[i] ?? -1;
@@ -1070,12 +1105,19 @@ $("main").addEventListener("input", e => {
   if (!inp) return;
   const r = estado.data.find(x => x.cve === inp.dataset.ver), out = inp.nextElementSibling;
   const filas = meAfecta(r, inp.value);
+  // ¿el fabricante da una lista de versiones concretas (no rangos)? Entonces no podemos afirmar «no afectada»
+  const esLista = r.versiones.every(f => rango(f.afectadas).exacta);
   out.className = "";
   if (filas === null) { out.textContent = inp.value.trim() ? "Escribe un número de versión" : ""; return; }
-  if (!filas.length) { out.className = "no"; out.textContent = "No afectada según el fabricante"; return; }
+  if (!filas.length) {
+    if (esLista) { out.className = "nd"; out.textContent = "No aparece entre las versiones afectadas · confírmalo en el aviso"; }
+    else { out.className = "no"; out.textContent = "No afectada según el fabricante"; }
+    return;
+  }
   const f = filas[0], varias = new Set(r.versiones.map(x => x.producto)).size > 1;
   out.className = "si";
-  out.textContent = `Afectada${varias ? ` (${f.producto})` : ""} → actualiza a ${f.corregida}`;
+  out.textContent = `Afectada${varias ? ` (${f.producto})` : ""}` +
+    (f.corregida === "Consultar aviso" ? " · la versión corregida está en el aviso" : ` → actualiza a ${f.corregida}`);
 });
 
 // ---------- Enlace directo a una CVE (…/#CVE-2026-12345)
