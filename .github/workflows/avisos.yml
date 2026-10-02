@@ -2,7 +2,7 @@ name: Avisos por correo de CVEs nuevas
 
 on:
   schedule:
-    - cron: "*/15 * * * *"   # cada 15 minutos (GitHub puede retrasarlo unos minutos en horas punta)
+    - cron: "7,22,37,52 * * * *"   # cada 15 minutos, fuera de los minutos redondos (GitHub los satura y los retrasa o descarta)
   workflow_dispatch:
     inputs:
       probar:

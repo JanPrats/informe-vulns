@@ -2,7 +2,7 @@ name: Generar y publicar informe
 
 on:
   schedule:
-    - cron: "0 5 * * *"     # todos los días a las 05:00 UTC (07:00 en Madrid en verano, 06:00 en invierno)
+    - cron: "17 5 * * *"    # todos los días a las 05:17 UTC (07:17 en Madrid en verano, 06:17 en invierno)
   workflow_dispatch:         # botón "Run workflow" para lanzarlo a mano
   push:
     branches: [main]
