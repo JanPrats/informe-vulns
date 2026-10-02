@@ -41,7 +41,7 @@ FABRICANTES = {
     "fortinet":    {"nombre": "Fortinet", "cpe": ["fortinet"],
                     "texto": ["fortios", "fortigate", "fortiproxy", "fortiweb", "fortimanager", "fortianalyzer",
                               "fortisiem", "fortiswitch", "fortiadc", "fortinet"]},
-    "cisco":       {"nombre": "Cisco (ASA/FTD/FMC/ISE)", "cpe": [],
+    "cisco":       {"nombre": "Cisco", "cpe": [],
                     "texto": ["adaptive security appliance", "cisco asa", "firepower", "secure firewall",
                               "cisco ise", "identity services engine", "anyconnect"]},
     "checkpoint":  {"nombre": "Check Point", "cpe": ["checkpoint"],
@@ -52,9 +52,9 @@ FABRICANTES = {
                     "texto": ["junos", "juniper networks", "srx series"]},
     "f5":          {"nombre": "F5", "cpe": ["f5"],
                     "texto": ["big-ip", "f5 networks", "nginx plus"]},
-    "citrix":      {"nombre": "Citrix / NetScaler", "cpe": ["citrix"],
+    "citrix":      {"nombre": "Citrix", "cpe": ["citrix"],
                     "texto": ["netscaler", "citrix adc", "citrix gateway"]},
-    "ivanti":      {"nombre": "Ivanti (Connect/Policy Secure)", "cpe": ["ivanti", "pulsesecure"],
+    "ivanti":      {"nombre": "Ivanti", "cpe": ["ivanti", "pulsesecure"],
                     "texto": ["connect secure", "policy secure", "pulse secure", "ivanti neurons for zta"]},
     "sophos":      {"nombre": "Sophos", "cpe": ["sophos"],
                     "texto": ["sophos firewall", "sophos xg", "sophos utm"]},
@@ -68,11 +68,38 @@ FABRICANTES = {
                     "texto": ["forcepoint"]},
     "stormshield": {"nombre": "Stormshield", "cpe": ["stormshield"],
                     "texto": ["stormshield"]},
-    "otros_fw":    {"nombre": "Array / Hillstone / Sangfor", "cpe": ["arraynetworks", "hillstonenet", "sangfor"],
-                    "texto": ["array networks", "hillstone", "sangfor"]},
-    "opnsense":    {"nombre": "pfSense / OPNsense", "cpe": ["netgate", "opnsense", "pfsense"],
-                    "texto": ["pfsense", "opnsense"]},
+    "array":       {"nombre": "Array Networks", "cpe": ["arraynetworks"],
+                    "texto": ["array networks"]},
+    "hillstone":   {"nombre": "Hillstone Networks", "cpe": ["hillstonenet"],
+                    "texto": ["hillstone"]},
+    "sangfor":     {"nombre": "Sangfor", "cpe": ["sangfor"],
+                    "texto": ["sangfor"]},
+    "netgate":     {"nombre": "Netgate", "cpe": ["netgate", "pfsense"],
+                    "texto": ["pfsense", "netgate"]},
+    "opnsense":    {"nombre": "OPNsense", "cpe": ["opnsense"],
+                    "texto": ["opnsense"]},
 }
+
+# Nombres antiguos (con productos o varias marcas juntas) -> solo la marca. Sirve para actualizar lo ya guardado.
+NOMBRES_ANTIGUOS = {
+    "Cisco (ASA/FTD/FMC/ISE)": ["cisco"],
+    "Citrix / NetScaler": ["citrix"],
+    "Ivanti (Connect/Policy Secure)": ["ivanti"],
+    "Array / Hillstone / Sangfor": ["array", "hillstone", "sangfor"],
+    "pfSense / OPNsense": ["netgate", "opnsense"],
+}
+
+
+def marca_actual(r):
+    """Nombre de fabricante vigente para un registro guardado con un nombre antiguo."""
+    claves = NOMBRES_ANTIGUOS.get(r.get("fabricante"))
+    if not claves:
+        return r.get("fabricante")
+    texto = " ".join([r.get("descripcion", ""), r.get("producto", ""), r.get("aviso", "")]).lower()
+    for k in claves:
+        if any(t in texto for t in FABRICANTES[k]["texto"] + FABRICANTES[k]["cpe"]):
+            return FABRICANTES[k]["nombre"]
+    return FABRICANTES[claves[0]]["nombre"]
 
 
 # ----------------------------------------------------------------------------- red
@@ -189,6 +216,27 @@ def obtener_cves(desde, hasta, api_key, ruta_cache, max_dias=120):
             json.dump({"v": VERSION_CACHE, "desde": limite.strftime(fmt), "hasta": hasta.strftime(fmt), "cves": list(cves.values())}, f)
     corte = desde.strftime("%Y-%m-%dT%H:%M:%S")
     return [c for c in cves.values() if c["published"] >= corte]
+
+
+EPSS_URL = "https://api.first.org/data/v1/epss"
+
+
+def anadir_epss(registros):
+    """Probabilidad de explotación en los próximos 30 días (EPSS, FIRST.org). 100 CVEs por consulta."""
+    ids = sorted({r["cve"] for r in registros})
+    datos = {}
+    for i in range(0, len(ids), 100):
+        lote = ids[i:i + 100]
+        try:
+            d = http_json(f"{EPSS_URL}?cve={','.join(lote)}&limit=100", intentos=2)
+            for x in d.get("data", []):
+                datos[x["cve"]] = (float(x["epss"]), float(x["percentile"]))
+        except Exception as e:
+            print(f"  ! EPSS: {e}", file=sys.stderr)
+            return
+    for r in registros:
+        if r["cve"] in datos:
+            r["epss"], r["epss_pct"] = datos[r["cve"]]
 
 
 def descargar_kev():
@@ -491,7 +539,8 @@ def imprimir(res, kev_nuevos, dias):
 
 def guardar_csv(res, ruta):
     with open(ruta, "w", newline="", encoding="utf-8-sig") as f:  # utf-8-sig para que Excel lo abra bien
-        w = csv.DictWriter(f, fieldnames=list(res[0].keys()) if res else ["cve"], delimiter=";")
+        campos = list(dict.fromkeys(k for r in res for k in r)) or ["cve"]
+        w = csv.DictWriter(f, fieldnames=campos, delimiter=";", restval="")
         w.writeheader()
         for r in res:
             fila = dict(r)
@@ -507,6 +556,8 @@ PLANTILLA_HTML = r"""<!doctype html>
 <html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Informe Vulnerabilidades</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 2.5 4.5 6.8v8.4c0 7.3 4.9 12.6 11.5 14.3 6.6-1.7 11.5-7 11.5-14.3V6.8z' fill='%23111827'/%3E%3Cpath d='m10.5 16.2 3.7 3.7 7.3-7.6' fill='none' stroke='%23fff' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<meta name="theme-color" content="#f7f8fa">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&display=swap" rel="stylesheet">
@@ -544,9 +595,7 @@ svg.i{width:15px;height:15px;flex:none;stroke:currentColor;fill:none;stroke-widt
 
 /* ---------- cabecera ---------- */
 .masthead{padding-block:56px 0}
-.mrow{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}
-.kicker{font:500 11.5px/1 var(--f-body);letter-spacing:.14em;text-transform:uppercase;color:var(--muted);display:flex;gap:14px;flex-wrap:wrap}
-.kicker b{color:var(--ink);font-weight:500}
+.mrow{display:flex;justify-content:flex-end;align-items:flex-start;gap:16px;flex-wrap:wrap}
 h1{font:400 clamp(44px,7vw,84px)/.95 var(--f-display);letter-spacing:-.02em;color:var(--ink);margin:22px 0 0;text-wrap:balance}
 h1 em{font-style:italic;color:var(--muted)}
 .meta-r{display:flex;align-items:center;gap:10px}
@@ -582,7 +631,7 @@ h1 em{font-style:italic;color:var(--muted)}
 /* ---------- herramientas ---------- */
 .tools{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--paper) 90%,transparent);backdrop-filter:saturate(1.2) blur(10px);border-bottom:1px solid var(--rule)}
 .tb{display:flex;flex-wrap:wrap;align-items:center;gap:8px 20px;padding-block:12px}
-.search{flex:1 1 280px;display:flex;align-items:center;gap:10px;color:var(--faint);border-bottom:1px solid var(--rule-strong);padding:6px 2px}
+.search{flex:1 1 200px;display:flex;align-items:center;gap:10px;color:var(--faint);border-bottom:1px solid var(--rule-strong);padding:6px 2px}
 .search:focus-within{border-color:var(--ink);color:var(--ink)}
 .search input{flex:1;min-width:0;border:0;background:transparent;font:inherit;font-size:14.5px;color:var(--ink);outline:none}
 .search input::placeholder{color:var(--faint)}
@@ -592,6 +641,15 @@ h1 em{font-style:italic;color:var(--muted)}
 .opt input:checked::after{content:"";width:7px;height:4px;border:1.6px solid #fff;border-top:0;border-right:0;transform:rotate(-45deg) translate(1px,-1px)}
 .link{background:none;border:0;padding:0;font:inherit;font-size:13.5px;color:var(--text);cursor:pointer;text-decoration:underline;text-decoration-color:var(--rule-strong);text-underline-offset:4px}
 .link:hover{color:var(--ink);text-decoration-color:var(--ink)}
+/* Mis fabricantes: lista desplegable discreta */
+.mf{position:relative}
+.mf-panel{position:absolute;top:calc(100% + 12px);left:-16px;z-index:20;width:270px;background:var(--sheet);border:1px solid var(--rule-strong);
+  border-radius:12px;box-shadow:0 14px 34px rgba(17,24,39,.12);padding:14px 16px}
+.mf-panel h5{margin:0 0 6px;font:500 10.5px var(--f-body);letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.mf-list{display:grid;max-height:300px;overflow:auto}
+.mf-list label{display:flex;align-items:center;gap:10px;padding:5px 0;font-size:14px;color:var(--ink);cursor:pointer}
+.mf-list input{accent-color:var(--ink);margin:0}
+.mf-foot{display:flex;justify-content:space-between;margin-top:8px;padding-top:10px;border-top:1px solid var(--rule)}
 .tb select{font:inherit;font-size:13px;color:var(--text);background:transparent;border:1px solid var(--rule-strong);border-radius:999px;padding:6px 10px;cursor:pointer}
 .go{display:inline-flex;align-items:center;gap:8px;font:500 13.5px var(--f-body);color:var(--sheet);background:var(--ink);border:0;border-radius:999px;padding:8px 16px;cursor:pointer}
 .go:hover{background:var(--accent)}
@@ -670,10 +728,20 @@ table.vtable{border-collapse:collapse;width:100%;font-size:13.5px;background:var
 .vtable td.fx{color:var(--fix);font-weight:600}
 .vtable td.fx::before{content:"↑ ";color:var(--fix)}
 .nota{margin:12px 0 0;font-size:13.5px;color:var(--muted);max-width:68ch}
+/* ¿Me afecta? */
+.check{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-top:14px;font-size:13.5px;color:var(--muted)}
+.check input{font:inherit;font-size:13.5px;color:var(--ink);background:var(--sheet);border:1px solid var(--rule-strong);border-radius:999px;padding:5px 12px;width:150px}
+.check input:focus{outline:none;border-color:var(--ink)}
+.check output{font-weight:500;color:var(--text)}
+.check output.si{color:var(--exploit)} .check output.no{color:var(--fix)}
+/* enlace directo: resalta un momento la CVE abierta */
+.cve.foco{animation:foco 2.6s ease-out}
+@keyframes foco{0%,45%{background:var(--wash)}100%{background:transparent}}
 .refs{display:flex;flex-wrap:wrap;gap:10px 22px;align-items:center;font-size:13.5px}
 .refs a{display:inline-flex;align-items:center;gap:6px;color:var(--ink);text-decoration:underline;text-decoration-color:var(--rule-strong);text-underline-offset:4px}
 .refs a:hover{color:var(--accent);text-decoration-color:currentColor}
 .refs span{font:12px var(--f-body);color:var(--muted)}
+.spec .pct{color:var(--muted);font-weight:400}
 .refs .due{color:var(--exploit)}
 .empty{padding:80px 0;text-align:center;font-size:16px;color:var(--muted)}
 
@@ -683,15 +751,30 @@ footer{padding-block:40px 64px;display:flex;justify-content:space-between;gap:16
 
 @media (max-width:900px){.vendor{padding-block:40px}}
 @media (max-width:640px){
-  .cve>summary{grid-template-columns:80px minmax(0,1fr)} .cright{grid-column:2;padding-top:0}
+  .cve>summary{grid-template-columns:72px minmax(0,1fr);gap:14px}
+  /* en móvil: fecha, «+» y «copiar» en una sola fila bajo el texto */
+  .cright{grid-column:2;padding-top:0;grid-template-columns:auto auto auto;justify-content:start;justify-items:start}
+  .copy{grid-column:auto}
+  .copy::after{right:auto;left:30px}
   .body{margin-left:0} .sec{grid-template-columns:minmax(0,1fr);gap:8px}
-  .masthead{padding-block:36px 24px}
+  .spec{grid-template-columns:repeat(2,minmax(0,1fr));gap:0 16px}
+  .masthead{padding-block:28px 0}
+  .views{margin-top:24px}
+  /* barra de herramientas: no fija (ocuparía media pantalla) y ordenada en cuadrícula */
+  .tools{position:static;backdrop-filter:none}
+  .tb{display:grid;grid-template-columns:1fr 1fr;gap:14px 16px;align-items:center}
+  .tb>*{justify-self:start}
+  .tb>.search{grid-column:1/-1;justify-self:stretch}
+  .go{justify-self:end}
+  .tb{position:relative}
+  .mf{position:static}
+  .mf-panel{left:0;right:0;width:auto;top:calc(100% + 4px)}
+  .check input{width:100%}
 }
 </style></head>
 <body>
 <header class="wrap masthead">
   <div class="mrow">
-    <div class="kicker"><b>Seguridad perimetral</b><span id="periodo"></span></div>
     <div class="meta-r">
       <span class="status" id="status"><span class="dot"></span><span id="statustxt"></span></span>
       <button class="ghost" id="theme" title="Cambiar a tema oscuro" aria-label="Cambiar tema"><svg class="i" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg></button>
@@ -720,10 +803,19 @@ footer{padding-block:40px 64px;display:flex;justify-content:space-between;gap:16
     <label class="search"><svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
       <input type="search" id="q" placeholder="Buscar por CVE, producto o versión" autocomplete="off"></label>
     <label class="opt"><input type="checkbox" id="kev"> Solo explotadas</label>
+    <span class="mf">
+      <button class="link" id="mf-btn" aria-expanded="false" aria-controls="mf-panel">Mis fabricantes</button>
+      <div class="mf-panel" id="mf-panel" hidden>
+        <h5>Mostrar solo</h5>
+        <div class="mf-list" id="mf-list"></div>
+        <div class="mf-foot"><button class="link" id="mf-todos">Ver todos</button><button class="link" id="mf-cerrar">Listo</button></div>
+      </div>
+    </span>
     <button class="link" id="toggle">Expandir todo</button>
-    <select id="auto" aria-label="Actualización automática">
-      <option value="0">Actualización automática: no</option><option value="15">Cada 15 min</option><option value="30">Cada 30 min</option>
-      <option value="60">Cada hora</option><option value="120">Cada 2 h</option><option value="360">Cada 6 h</option>
+    <button class="link" id="export">Exportar a Excel</button>
+    <select id="auto" aria-label="Actualización automática" title="Actualización automática">
+      <option value="0">Auto: no</option><option value="15">Auto: 15 min</option><option value="30">Auto: 30 min</option>
+      <option value="60">Auto: 1 h</option><option value="120">Auto: 2 h</option><option value="360">Auto: 6 h</option>
     </select>
     <button class="go" id="refresh"><svg class="i" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 4v5h-5"/></svg>Actualizar</button>
   </div>
@@ -748,7 +840,7 @@ const store = {
   get(k){ try { return JSON.parse(localStorage.getItem(k)); } catch(e) { return null; } },
   set(k,v){ try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch(e) { return false; } },
 };
-const CLAVE = "vp-archivo-" + Object.keys(CONFIG.fabricantes).sort().join(",") + "-" + CONFIG.min_cvss + (CONFIG.solo_kev ? "-kev" : "");
+const CLAVE = "vp-archivo-v2-" + Object.keys(CONFIG.fabricantes).sort().join(",") + "-" + CONFIG.min_cvss + (CONFIG.solo_kev ? "-kev" : "");
 const MAX_DIAS = 365;   // el panel «Por periodo» permite ir como mucho un año atrás
 const isoDia = d => new Date(d).toISOString().slice(0, 10);
 const haceDias = n => isoDia(Date.now() - n * 864e5);
@@ -776,7 +868,14 @@ let vista = store.get("vp-vista") === "periodo" ? "periodo" : "recientes";
 let desdeSel = store.get("vp-desde") || haceDias(30);
 if (desdeSel < haceDias(MAX_DIAS)) desdeSel = haceDias(MAX_DIAS);
 const corteVista = () => vista === "recientes" ? isoDia(new Date(estado.hasta) - CONFIG.dias * 864e5) : desdeSel;
-const datosVista = () => { const c = corteVista(); return estado.data.filter(r => r.publicado >= c); };
+// «Mis fabricantes»: si hay alguno marcado, solo se muestran esos (se recuerda en este navegador)
+const MARCAS = new Set(Object.values(CONFIG.fabricantes).map(f => f.nombre));
+let misFab = new Set((store.get("vp-mis") || []).filter(n => MARCAS.has(n)));
+let forzada = null;   // CVE abierta por enlace directo: se muestra aunque los filtros la ocultaran
+const datosVista = () => {
+  const c = corteVista();
+  return estado.data.filter(r => r.cve === forzada || (r.publicado >= c && (!misFab.size || misFab.has(r.fabricante))));
+};
 
 // tema: siempre claro salvo que el usuario elija el oscuro con el botón
 const root = document.documentElement;
@@ -801,16 +900,24 @@ const NOMBRES = {CRITICAL:["Crítica","Críticas"],HIGH:["Alta","Altas"],MEDIUM:
 
 function bloque(r){
   const s = sk(r.severidad);
+  const epss = r.epss != null
+    ? `<div class="${r.epss >= 0.1 ? "worst" : ""}" title="Probabilidad de que se explote en los próximos 30 días (EPSS, FIRST.org)"><dt>Prob. de explotación</dt>
+       <dd>${(r.epss * 100).toLocaleString("es-ES", {maximumFractionDigits: r.epss < 0.01 ? 2 : 1})} %<span class="pct"> · percentil ${Math.round(r.epss_pct * 100)}</span></dd></div>`
+    : "";
   const reqs = r.requisitos.length
     ? `<p class="verdict">${esc(r.resumen_explotacion)}</p>
-       <dl class="spec">${r.requisitos.map(([k,v]) => `<div class="${PEOR.includes(v)?"worst":""}"><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join("")}</dl>`
-    : `<p class="nota">El fabricante aún no ha publicado la métrica CVSS.</p>`;
+       <dl class="spec">${r.requisitos.map(([k,v]) => `<div class="${PEOR.includes(v)?"worst":""}"><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join("")}${epss}</dl>`
+    : `<p class="nota">El fabricante aún no ha publicado la métrica CVSS.</p>${epss ? `<dl class="spec">${epss}</dl>` : ""}`;
   const cond = r.condiciones.length ? `<p class="cond"><b>Condiciones.</b> ${esc(r.condiciones.join(" "))}</p>` : "";
   const vers = r.versiones.length
     ? `<div class="tblwrap"><table class="vtable"><thead><tr><th>Producto</th><th>Versiones afectadas</th><th>Actualizar a</th></tr></thead><tbody>${
         r.versiones.map(v => `<tr><td>${esc(v.producto)}</td><td class="mono">${esc(v.afectadas)}</td><td class="mono fx">${esc(v.corregida)}</td></tr>`).join("")
       }</tbody></table></div>`
     : `<p class="nota">Sin datos de versiones estructurados. Consulta el aviso del fabricante.</p>`;
+  const check = r.versiones.length
+    ? `<div class="check"><label for="v-${esc(r.cve)}">¿Me afecta? Tu versión</label>
+         <input id="v-${esc(r.cve)}" data-ver="${esc(r.cve)}" placeholder="p. ej. 7.4.3" autocomplete="off" spellcheck="false"><output></output></div>`
+    : "";
   const sol = r.solucion.length ? `<p class="nota">${esc(r.solucion.join(" "))}</p>` : "";
   return `<details class="cve s-${s}" data-id="${esc(r.cve)}" data-kev="${r.explotada_kev?1:0}" data-q="${esc([r.cve,r.fabricante,r.producto,r.descripcion,r.cwe,r.versiones.map(v=>v.afectadas+" "+v.corregida).join(" ")].join(" ").toLowerCase())}">
     <summary>
@@ -827,11 +934,12 @@ function bloque(r){
     <div class="body">
       <section class="sec"><h4>Descripción</h4><div><p class="desc">${esc(r.descripcion.trim())}</p></div></section>
       <section class="sec"><h4>Explotación</h4><div>${reqs}${cond}</div></section>
-      <section class="sec"><h4>Versiones</h4><div>${vers}${sol}</div></section>
+      <section class="sec"><h4>Versiones</h4><div>${vers}${check}${sol}</div></section>
       <section class="sec"><h4>Referencias</h4><div class="refs">
         <a href="${esc(r.url)}" target="_blank" rel="noopener">NVD${ico("ext")}</a>
         ${r.aviso ? `<a href="${esc(r.aviso)}" target="_blank" rel="noopener">Aviso del fabricante${ico("ext")}</a>` : ""}
         ${r.cwe ? `<span>${esc(r.cwe)}</span>` : ""}
+        <a href="#${esc(r.cve)}" class="enlace" data-enlace="${esc(r.cve)}">Copiar enlace directo</a>
         ${r.kev_fecha_limite ? `<span class="due">Límite CISA ${fecha(r.kev_fecha_limite)}</span>` : ""}
       </div></section>
     </div></details>`;
@@ -848,9 +956,6 @@ function render(){
   const cuenta = (lista, k) => lista.filter(r => sk(r.severidad) === k).length;
   const num = i => String(i + 1).padStart(2, "0");
 
-  const desde = new Date(corteVista() + "T00:00:00"), hasta = new Date(estado.hasta);
-  const fmt = d => d.toLocaleDateString("es-ES",{day:"numeric",month:"long",...(d.getFullYear() !== hasta.getFullYear() ? {year:"numeric"} : {})});
-  $("periodo").textContent = `${fmt(desde)} — ${fmt(hasta)} ${hasta.getFullYear()}`;
   $("statustxt").textContent = `Actualizado ${fechaHora(estado.hasta)}`;
 
   $("index").innerHTML = fabs.map(({f, todos}, i) => {
@@ -866,7 +971,7 @@ function render(){
       <div>${prods.map(([p, rows]) => `<div class="product"><div class="phead"><h3>${esc(p)}</h3><span>${rows.length} CVE${rows.length>1?"s":""}</span></div>
         ${rows.sort((a,b)=>prio(b)-prio(a)).map(bloque).join("")}</div>`).join("")}</div>
     </section>`;
-  }).join("") : `<p class="empty">No hay vulnerabilidades en este periodo.</p>`;
+  }).join("") : `<p class="empty">${misFab.size ? "No hay vulnerabilidades de tus fabricantes en este periodo." : "No hay vulnerabilidades en este periodo."}</p>`;
   document.querySelectorAll(".cve").forEach(d => { if (abiertos.has(d.dataset.id)) d.open = true; });
   filtrar();
 }
@@ -879,6 +984,136 @@ function filtrar(){
   document.querySelectorAll(".vendor").forEach(v => v.hidden = !v.querySelector(".cve:not([hidden])"));
 }
 $("q").oninput = filtrar; $("kev").onchange = filtrar;
+
+// ---------- Mis fabricantes
+const nombresFab = Object.values(CONFIG.fabricantes).map(f => f.nombre).sort((a, b) => a.localeCompare(b, "es"));
+function pintarMF(){
+  $("mf-list").innerHTML = nombresFab.map(n => `<label><input type="checkbox" value="${esc(n)}"${misFab.has(n) ? " checked" : ""}>${esc(n)}</label>`).join("");
+  $("mf-btn").textContent = misFab.size ? `Mis fabricantes · ${misFab.size}` : "Mis fabricantes";
+}
+function abrirMF(si){ $("mf-panel").hidden = !si; $("mf-btn").setAttribute("aria-expanded", String(si)); }
+$("mf-btn").onclick = e => { e.stopPropagation(); abrirMF($("mf-panel").hidden); };
+$("mf-list").onchange = e => {
+  e.target.checked ? misFab.add(e.target.value) : misFab.delete(e.target.value);
+  store.set("vp-mis", [...misFab]);
+  $("mf-btn").textContent = misFab.size ? `Mis fabricantes · ${misFab.size}` : "Mis fabricantes";
+  render();
+};
+$("mf-todos").onclick = () => { misFab.clear(); store.set("vp-mis", []); pintarMF(); render(); };
+$("mf-cerrar").onclick = () => abrirMF(false);
+document.addEventListener("click", e => { if (!e.target.closest(".mf")) abrirMF(false); });
+document.addEventListener("keydown", e => { if (e.key === "Escape") abrirMF(false); });
+pintarMF();
+
+// ---------- ¿Me afecta? Compara la versión escrita con los rangos de la tabla de versiones
+const numeros = t => (String(t).match(/\d+/g) || []).map(Number);
+function comparar(a, b){
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const x = a[i] ?? -1, y = b[i] ?? -1;
+    if (x !== y) return x < y ? -1 : 1;
+  }
+  return 0;
+}
+function rango(t){
+  let m;
+  if ((m = t.match(/^(.+?)\s*→\s*anteriores a (.+)$/i))) return {ini: m[1], fin: m[2], incl: false};
+  if ((m = t.match(/^anteriores a (.+)$/i))) return {fin: m[1], incl: false};
+  if ((m = t.match(/^(.+?)\s*→\s*(.+?) \(incluida\)$/i))) return {ini: m[1], fin: m[2], incl: true};
+  if ((m = t.match(/^hasta (.+?) \(incluida\)$/i))) return {fin: m[1], incl: true};
+  if (/^todas$/i.test(t)) return {todas: true};
+  return {exacta: t};
+}
+function meAfecta(r, texto){
+  const v = numeros(texto);
+  if (!v.length) return null;
+  const coinciden = [];
+  for (const fila of r.versiones) {
+    const g = rango(fila.afectadas);
+    let dentro;
+    if (g.todas) dentro = true;
+    else if (g.exacta) dentro = comparar(v, numeros(g.exacta)) === 0;
+    else {
+      const sobre = !g.ini || comparar(v, numeros(g.ini)) >= 0;
+      const c = comparar(v, numeros(g.fin));
+      dentro = sobre && (g.incl ? c <= 0 : c < 0);
+    }
+    if (dentro) {
+      // se prefiere la fila de la misma rama (más números en común con la versión corregida)
+      const f = numeros(g.fin || g.exacta || "");
+      let comun = 0; while (comun < v.length && v[comun] === f[comun]) comun++;
+      coinciden.push({fila, comun});
+    }
+  }
+  coinciden.sort((a, b) => b.comun - a.comun);
+  return coinciden.map(c => c.fila);
+}
+$("main").addEventListener("input", e => {
+  const inp = e.target.closest("input[data-ver]");
+  if (!inp) return;
+  const r = estado.data.find(x => x.cve === inp.dataset.ver), out = inp.nextElementSibling;
+  const filas = meAfecta(r, inp.value);
+  out.className = "";
+  if (filas === null) { out.textContent = inp.value.trim() ? "Escribe un número de versión" : ""; return; }
+  if (!filas.length) { out.className = "no"; out.textContent = "No afectada según el fabricante"; return; }
+  const f = filas[0], varias = new Set(r.versiones.map(x => x.producto)).size > 1;
+  out.className = "si";
+  out.textContent = `Afectada${varias ? ` (${f.producto})` : ""} → actualiza a ${f.corregida}`;
+});
+
+// ---------- Enlace directo a una CVE (…/#CVE-2026-12345)
+async function abrirDesdeEnlace(){
+  const m = location.hash.match(/^#(CVE-\d{4}-\d+)$/i);
+  if (!m) return;
+  const id = m[1].toUpperCase();
+  let r = estado.data.find(x => x.cve === id);
+  if (!r && CONFIG.archivo) { await cargarArchivo(); r = estado.data.find(x => x.cve === id); }
+  if (!r) { estadoTxt(`${id} no está en el informe del último año.`); return; }
+  forzada = id;
+  $("q").value = ""; $("kev").checked = false;
+  if (r.publicado < corteVista()) elegirDesde(r.publicado); else render();
+  const d = document.querySelector(`.cve[data-id="${id}"]`);
+  if (!d) return;
+  d.open = true;
+  d.scrollIntoView({block: "center", behavior: "smooth"});
+  d.classList.remove("foco"); void d.offsetWidth; d.classList.add("foco");
+}
+window.addEventListener("hashchange", abrirDesdeEnlace);
+$("main").addEventListener("click", async e => {
+  const a = e.target.closest("a[data-enlace]");
+  if (!a) return;
+  e.preventDefault();
+  const url = location.href.split("#")[0] + "#" + a.dataset.enlace;
+  history.replaceState(null, "", "#" + a.dataset.enlace);
+  let ok = true;
+  try { await navigator.clipboard.writeText(url); } catch (err) { ok = false; }
+  a.textContent = ok ? "Enlace copiado" : url;
+  setTimeout(() => { a.textContent = "Copiar enlace directo"; }, 1800);
+});
+
+// ---------- Exportar a Excel (CSV con separador «;» y BOM, que Excel abre directamente)
+$("export").onclick = () => {
+  const q = $("q").value.toLowerCase().trim(), soloKev = $("kev").checked;
+  const filas = datosVista()
+    .filter(r => (!soloKev || r.explotada_kev) &&
+      (!q || [r.cve, r.fabricante, r.producto, r.descripcion, r.cwe, r.versiones.map(v => v.afectadas + " " + v.corregida).join(" ")].join(" ").toLowerCase().includes(q)))
+    .sort((a, b) => a.fabricante.localeCompare(b.fabricante) || a.producto.localeCompare(b.producto) || prio(b) - prio(a));
+  const cab = ["Fabricante","Producto","CVE","CVSS","Severidad","Explotada (CISA KEV)","Prob. explotación EPSS (%)","Publicada",
+               "Versiones afectadas","Actualizar a","Descripción","Aviso del fabricante","NVD"];
+  const celda = v => { const t = String(v ?? ""); return /[";\n\r]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
+  const lineas = [cab, ...filas.map(r => [
+    r.fabricante, r.producto, r.cve, r.cvss != null ? String(r.cvss).replace(".", ",") : "", SEV[sk(r.severidad)] || "Sin puntuar",
+    r.explotada_kev ? "Sí" : "No", r.epss != null ? (r.epss * 100).toFixed(2).replace(".", ",") : "", r.publicado,
+    r.versiones.map(v => `${v.producto}: ${v.afectadas}`).join(" | "), [...new Set(r.versiones.map(v => v.corregida))].join(" | "),
+    r.descripcion.replace(/\s+/g, " ").trim(), r.aviso || "", r.url,
+  ])].map(f => f.map(celda).join(";"));
+  const blob = new Blob(["\ufeff" + lineas.join("\r\n")], {type: "text/csv;charset=utf-8"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `vulnerabilidades_${corteVista()}_${isoDia(Date.now())}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  estadoTxt(`Exportadas ${filas.length} CVE${filas.length === 1 ? "" : "s"}`);
+};
 
 // Copiar resumen de un CVE. Con formato (Outlook, Teams, Word) se pega así, con el nombre del aviso como enlace:
 //   FortiMail: CVE-2026-104286
@@ -1145,6 +1380,18 @@ async function cargarKEV(){
   }
 }
 
+// EPSS (FIRST.org) para las CVEs indicadas, 100 por consulta
+async function cargarEPSS(lista){
+  for (let i = 0; i < lista.length; i += 100) {
+    const lote = lista.slice(i, i + 100);
+    try {
+      const d = await getJSON(`${CONFIG.epss}?cve=${lote.map(r => r.cve).join(",")}&limit=100`, 1);
+      const m = Object.fromEntries((d.data || []).map(x => [x.cve, x]));
+      lote.forEach(r => { const x = m[r.cve]; if (x) { r.epss = +x.epss; r.epss_pct = +x.percentile; } });
+    } catch (e) { console.warn("EPSS", e); return; }
+  }
+}
+
 // De los CVEs brutos de NVD, se queda con los de los fabricantes vigilados
 function procesar(brutos, kevMap){
   const out = [];
@@ -1176,6 +1423,7 @@ async function actualizar(){
     nuevos.forEach(r => m.set(r.cve, Object.assign(m.get(r.cve) || {}, r)));
     const cna = await detalleCNA(nuevos.map(r => r.cve));
     nuevos.forEach(r => enriquecer(m.get(r.cve), cna[r.cve]));
+    await cargarEPSS(nuevos.map(r => m.get(r.cve)));
     for (const r of m.values()) {
       const k = kev.map[r.cve];
       r.explotada_kev = k ? "SÍ" : ""; r.kev_fecha_limite = k ? k.dueDate || "" : "";
@@ -1242,6 +1490,7 @@ async function asegurarRango(){
     const nuevos = procesar(brutos, kev.map);
     const cna = await detalleCNA(nuevos.map(r => r.cve));
     nuevos.forEach(r => { enriquecer(r, cna[r.cve]); r.nueva = false; });
+    await cargarEPSS(nuevos);
     const m = new Map(estado.data.map(r => [r.cve, r]));
     nuevos.forEach(r => { if (!m.has(r.cve)) m.set(r.cve, r); });
     estado = {...estado, desde: ini.toISOString(), data: [...m.values()]};
@@ -1309,6 +1558,7 @@ render();
 // si los datos llevan más tiempo sin actualizarse que el intervalo elegido, actualiza al abrir
 const auto = Number($("auto").value);
 if (auto && Date.now() - new Date(estado.hasta) > auto * 60e3) actualizar(); else asegurarRango();
+abrirDesdeEnlace();
 </script>
 </body></html>
 """
@@ -1327,7 +1577,7 @@ def guardar_html(res, ruta, dias, seleccion, min_cvss=0, solo_kev=False, histori
         "cubre_desde": (ahora - timedelta(days=historico or dias)).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
         "fabricantes": {k: FABRICANTES[k] for k in seleccion},
         "traduccion": TRADUCCION,
-        "nvd": NVD_URL, "cveorg": CVE_ORG_URL, "kev": KEV_URL_GITHUB,
+        "nvd": NVD_URL, "cveorg": CVE_ORG_URL, "kev": KEV_URL_GITHUB, "epss": EPSS_URL,
     }
     if archivo:
         config["archivo"] = os.path.basename(archivo["ruta"])
@@ -1361,6 +1611,8 @@ def actualizar_archivo(dias, hasta, recientes, desde_recientes, seleccion, kev, 
     leer = lambda t: datetime.strptime(t, FMT_ISO).replace(tzinfo=timezone.utc)
     inicio = hasta - timedelta(days=dias)
     datos = {r["cve"]: r for r in (estado or {}).get("data", [])}
+    for r in datos.values():
+        r["fabricante"] = marca_actual(r)
     if estado:
         huecos = [(inicio, leer(estado["desde"])), (leer(estado["hasta"]), desde_recientes)]
     else:
@@ -1445,12 +1697,14 @@ def main():
     res = [r for r in todos if r["publicado"] >= corte]
     kev_nuevos = kev_recientes(kev, desde, seleccion)
 
+    anadir_epss(todos)
     archivo = None
     if a.html and a.archivo > dias_html:
         ruta_cna = None if a.sin_cache else os.path.join(carpeta, ".cache_cna.json")
         ruta_estado = None if a.sin_cache else os.path.join(carpeta, ".cache_archivo.json")
         archivo = actualizar_archivo(a.archivo, hasta, todos, hasta - timedelta(days=dias_html), seleccion, kev,
                                      a.min_cvss, a.solo_kev, api_key, ruta_estado, ruta_cna)
+        anadir_epss(archivo["data"])   # el EPSS cambia cada día: se refresca todo el histórico
         archivo["ruta"] = os.path.join(os.path.dirname(os.path.abspath(a.html)), "archivo.js")
         with open(archivo["ruta"], "w", encoding="utf-8") as f:
             f.write("window.__ARCHIVO__=")

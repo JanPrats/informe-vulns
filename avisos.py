@@ -17,6 +17,8 @@ Configuración (variables de entorno; en GitHub, como secretos):
   SMTP_HOST       por defecto smtp.gmail.com
   SMTP_PORT       por defecto 465 (SSL)
   INFORME_URL     enlace al informe web que se incluye en el correo
+  AVISO_FABRICANTES  opcional: solo avisar de estos fabricantes, separados por comas
+                     (clave o nombre, p. ej. "fortinet,paloalto" o "Fortinet,Palo Alto Networks")
   NVD_API_KEY     opcional
 
 Uso:
@@ -231,7 +233,11 @@ def main():
 
     kev = vp.descargar_kev()
     cves = vp.obtener_cves(desde, hasta, api_key, RUTA_CACHE_NVD, max_dias=VENTANA_DIAS)
-    actuales = vp.filtrar(cves, list(vp.FABRICANTES), kev, 0)
+    filtro = [x.strip().lower() for x in os.environ.get("AVISO_FABRICANTES", "").split(",") if x.strip()]
+    seleccion = [k for k, f in vp.FABRICANTES.items() if not filtro or k in filtro or f["nombre"].lower() in filtro]
+    if filtro and not seleccion:
+        sys.exit(f"AVISO_FABRICANTES no coincide con ningún fabricante: {filtro}")
+    actuales = vp.filtrar(cves, seleccion, kev, 0)
     por_id = {c["id"]: c for c in cves}
 
     estado = cargar_estado()
