@@ -2,6 +2,7 @@
 .cache_nvd.json
 .cache_cna.json
 .cache_archivo.json
+.cache_avisos.json
 archivo.js
 informe.html
 informe.csv

@@ -34,6 +34,7 @@ jobs:
             .cache_nvd.json
             .cache_cna.json
             .cache_archivo.json
+            .cache_avisos.json
           key: cache-vulns-${{ github.run_id }}
           restore-keys: cache-vulns-
 

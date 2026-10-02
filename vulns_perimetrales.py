@@ -19,6 +19,8 @@ Solo usa la librería estándar de Python (3.8+).
 import argparse
 import csv
 import gzip
+import html as html_mod
+import re
 import json
 import os
 import sys
@@ -219,6 +221,67 @@ def obtener_cves(desde, hasta, api_key, ruta_cache, max_dias=120):
 
 
 EPSS_URL = "https://api.first.org/data/v1/epss"
+
+
+def _texto_celda(c):
+    c = re.sub(r"<sup.*?</sup>", "", c, flags=re.S | re.I)          # notas al pie («3.5¹»)
+    c = html_mod.unescape(re.sub(r"<[^>]+>", " ", c))
+    return " ".join(c.split())
+
+
+def tabla_arreglos_cisco(url):
+    """Lee la tabla «Release → First Fixed Release» del aviso de Cisco. Devuelve [{"rama", "corregida"}]."""
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (vulns-perimetrales)"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        pagina = r.read().decode("utf-8", errors="replace")
+    pagina = re.sub(r"<(script|style).*?</>", "", pagina, flags=re.S | re.I)   # código de la página, no contenido
+    filas = []
+    for tabla in re.findall(r"<table.*?</table>", pagina, re.S | re.I):
+        if "first fixed release" not in tabla.lower():
+            continue
+        for tr in re.findall(r"<tr.*?</tr>", tabla, re.S | re.I):
+            celdas = [_texto_celda(c) for c in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", tr, re.S | re.I)]
+            # la rama debe empezar por un número de versión (3.1, 9.16, 7.0.x…)
+            if len(celdas) >= 2 and re.match(r"\d", celdas[0]) and "first fixed" not in celdas[-1].lower():
+                filas.append({"rama": celdas[0], "corregida": celdas[-1]})
+    return filas
+
+
+def anadir_arreglos_fabricante(registros, ruta_cache):
+    """Versiones corregidas por rama sacadas del propio aviso del fabricante (de momento, Cisco).
+    Se guardan en caché 7 días por aviso para no consultar la web de Cisco en cada ejecución."""
+    cache = {}
+    if ruta_cache and os.path.exists(ruta_cache):
+        try:
+            with open(ruta_cache, encoding="utf-8") as f:
+                cache = json.load(f)
+        except (OSError, ValueError):
+            cache = {}
+    ahora = time.time()
+    urls = {r["aviso"] for r in registros if "sec.cloudapps.cisco.com" in r.get("aviso", "")}
+    pendientes = [u for u in urls if u not in cache or ahora - cache[u]["t"] > 7 * 86400]
+
+    def leer(u):
+        try:
+            return u, tabla_arreglos_cisco(u)
+        except Exception as e:
+            print(f"  ! Aviso de Cisco {u}: {e}", file=sys.stderr)
+            return u, None
+
+    if pendientes:
+        print(f"  Cisco: leyendo la tabla de versiones corregidas de {len(pendientes)} avisos…", file=sys.stderr)
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(4) as ex:
+            for u, filas in ex.map(leer, pendientes):
+                if filas is not None:
+                    cache[u] = {"t": ahora, "filas": filas}
+        if ruta_cache:
+            with open(ruta_cache, "w", encoding="utf-8") as f:
+                json.dump(cache, f)
+    for r in registros:
+        filas = cache.get(r.get("aviso", ""), {}).get("filas")
+        if filas:
+            r["arreglos"] = filas
 
 
 def anadir_epss(registros):
@@ -921,24 +984,51 @@ function notasSolucion(r){
   }).join("");
 }
 
-// Filas de la tabla de versiones. Si el fabricante da una lista de versiones sueltas (p. ej. Cisco), se agrupan
-// en una fila por producto. «Consultar aviso» no es una versión: se muestra como enlace discreto al aviso.
-function filasVersiones(r){
-  const celdaArreglo = c => c === "Consultar aviso"
-    ? `<td class="aviso">${r.aviso ? `<a href="${esc(r.aviso)}" target="_blank" rel="noopener">Ver aviso</a>` : "Ver aviso"}</td>`
-    : `<td class="mono fx">${esc(c)}</td>`;
-  const grupos = [];
-  for (const v of r.versiones) {
-    const suelta = !!rango(v.afectadas).exacta;
-    const g = suelta && grupos.find(x => x.suelta && x.producto === v.producto && x.corregida === v.corregida);
-    if (g) g.lista.push(v.afectadas);
-    else grupos.push({producto: v.producto, corregida: v.corregida, suelta, lista: [v.afectadas]});
+// Rama de una versión: sus dos primeros números («3.2 Patch 8» → «3.2», «9.16.4.42» → «9.16»)
+const ramaDe = t => (String(t).match(/\d+/g) || []).slice(0, 2).join(".");
+// Versión corregida para una rama según la tabla del propio aviso del fabricante (Cisco «First Fixed Release»)
+function arregloRama(r, rama){
+  const f = (r.arreglos || []).find(x => /^\d/.test(x.rama) && ramaDe(x.rama) === rama);
+  return f ? f.corregida : null;
+}
+// «3.3 Patch 1, 3.3 Patch 2 … 3.3 Patch 11» → «3.3 Patch 1 a 11»
+function resumenRama(rama, lista){
+  const reP = /(?:^|[\s._-])p(?:atch)?\s*\.?\s*(\d+)\b/i;
+  const orden = [...lista].sort((a, b) => comparar(numeros(a), numeros(b)));
+  const parches = [...new Set(orden.map(v => v.match(reP)).filter(Boolean).map(m => +m[1]))].sort((a, b) => a - b);
+  const otras = orden.filter(v => !reP.test(v));
+  const partes = [];
+  if (otras.length) partes.push(otras.length <= 3 ? otras.join(", ") : `${otras[0]} – ${otras.at(-1)} (${otras.length} versiones)`);
+  if (parches.length) {
+    const seguidos = parches.every((p, i) => !i || p === parches[i - 1] + 1);
+    const txt = parches.length === 1 ? `Patch ${parches[0]}` : seguidos ? `Patch ${parches[0]} a ${parches.at(-1)}` : `Patch ${parches.join(", ")}`;
+    partes.push(otras.length ? txt : `${rama} ${txt}`);
   }
-  return grupos.map(g => `<tr><td>${esc(g.producto)}</td>` +
-    (g.lista.length > 1
-      ? `<td class="lista">${esc([...g.lista].sort((a, b) => comparar(numeros(a), numeros(b))).join(", "))}</td>`
-      : `<td class="mono">${esc(g.lista[0])}</td>`) +
-    celdaArreglo(g.corregida) + `</tr>`).join("");
+  return partes.join(" · ");
+}
+
+// Filas de la tabla de versiones. Si el fabricante da una lista de versiones sueltas (p. ej. Cisco), se agrupan
+// en una fila por rama, y la versión corregida sale de la tabla de su aviso cuando está disponible.
+function filasVersiones(r){
+  const celdaArreglo = c => {
+    if (!c || c === "Consultar aviso")
+      return `<td class="aviso">${r.aviso ? `<a href="${esc(r.aviso)}" target="_blank" rel="noopener">Ver aviso</a>` : "Ver aviso"}</td>`;
+    if (!/^\d/.test(c))   // «Migrate to a fixed release.», «Not vulnerable»…
+      return `<td class="aviso">${/migrat/i.test(c) ? "Migrar a una rama corregida" : /not vuln/i.test(c) ? "No afectada" : esc(c)}</td>`;
+    return `<td class="mono fx">${esc(c)}</td>`;
+  };
+  const filas = [];
+  const sueltas = {};   // producto -> rama -> versiones
+  for (const v of r.versiones) {
+    if (rango(v.afectadas).exacta) ((sueltas[v.producto] ??= {})[ramaDe(v.afectadas)] ??= []).push(v.afectadas);
+    else filas.push(`<tr><td>${esc(v.producto)}</td><td class="mono">${esc(v.afectadas)}</td>${celdaArreglo(v.corregida)}</tr>`);
+  }
+  for (const [producto, ramas] of Object.entries(sueltas)) {
+    const orden = Object.keys(ramas).sort((a, b) => comparar(numeros(a), numeros(b)));
+    orden.forEach((rama, i) => filas.push(`<tr>${i ? "" : `<td rowspan="${orden.length}">${esc(producto)}</td>`}` +
+      `<td class="mono">${esc(resumenRama(rama, ramas[rama]))}</td>${celdaArreglo(arregloRama(r, rama))}</tr>`));
+  }
+  return filas.join("");
 }
 
 function bloque(r){
@@ -1110,14 +1200,22 @@ $("main").addEventListener("input", e => {
   out.className = "";
   if (filas === null) { out.textContent = inp.value.trim() ? "Escribe un número de versión" : ""; return; }
   if (!filas.length) {
+    // si el aviso del fabricante dice desde qué versión está corregida la rama y la tuya es igual o posterior
+    const fix = arregloRama(r, ramaDe(inp.value));
+    if (fix && /^\d/.test(fix) && comparar(numeros(inp.value), numeros(fix)) >= 0) {
+      out.className = "no"; out.textContent = `No afectada · corregida desde ${fix}`; return;
+    }
     if (esLista) { out.className = "nd"; out.textContent = "No aparece entre las versiones afectadas · confírmalo en el aviso"; }
     else { out.className = "no"; out.textContent = "No afectada según el fabricante"; }
     return;
   }
   const f = filas[0], varias = new Set(r.versiones.map(x => x.producto)).size > 1;
+  // si el aviso del fabricante da la versión corregida de esta rama, manda sobre la tabla de CVE.org
+  const delAviso = arregloRama(r, ramaDe(inp.value));
+  const arreglo = delAviso && /^\d/.test(delAviso) ? delAviso : f.corregida;
   out.className = "si";
   out.textContent = `Afectada${varias ? ` (${f.producto})` : ""}` +
-    (f.corregida === "Consultar aviso" ? " · la versión corregida está en el aviso" : ` → actualiza a ${f.corregida}`);
+    (arreglo === "Consultar aviso" ? " · la versión corregida está en el aviso" : ` → actualiza a ${arreglo}`);
 });
 
 // ---------- Enlace directo a una CVE (…/#CVE-2026-12345)
@@ -1758,6 +1856,8 @@ def main():
     kev_nuevos = kev_recientes(kev, desde, seleccion)
 
     anadir_epss(todos)
+    ruta_avisos = None if a.sin_cache else os.path.join(carpeta, ".cache_avisos.json")
+    anadir_arreglos_fabricante(todos, ruta_avisos)
     archivo = None
     if a.html and a.archivo > dias_html:
         ruta_cna = None if a.sin_cache else os.path.join(carpeta, ".cache_cna.json")
@@ -1765,6 +1865,7 @@ def main():
         archivo = actualizar_archivo(a.archivo, hasta, todos, hasta - timedelta(days=dias_html), seleccion, kev,
                                      a.min_cvss, a.solo_kev, api_key, ruta_estado, ruta_cna)
         anadir_epss(archivo["data"])   # el EPSS cambia cada día: se refresca todo el histórico
+        anadir_arreglos_fabricante(archivo["data"], ruta_avisos)
         archivo["ruta"] = os.path.join(os.path.dirname(os.path.abspath(a.html)), "archivo.js")
         with open(archivo["ruta"], "w", encoding="utf-8") as f:
             f.write("window.__ARCHIVO__=")
