@@ -728,6 +728,7 @@ table.vtable{border-collapse:collapse;width:100%;font-size:13.5px;background:var
 .vtable td.fx{color:var(--fix);font-weight:600}
 .vtable td.fx::before{content:"↑ ";color:var(--fix)}
 .nota{margin:12px 0 0;font-size:13.5px;color:var(--muted);max-width:68ch}
+.nota b{color:var(--ink);font-weight:600}
 /* ¿Me afecta? */
 .check{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-top:14px;font-size:13.5px;color:var(--muted)}
 .check input{font:inherit;font-size:13.5px;color:var(--ink);background:var(--sheet);border:1px solid var(--rule-strong);border-radius:999px;padding:5px 12px;width:150px}
@@ -898,6 +899,23 @@ const extracto = t => t.trim().split(/(?<=\.)\s/)[0];
 const ticks = v => `<span class="ticks">${Array.from({length:10}, (_, i) => `<i class="${v != null && v > i ? "on" : ""}"></i>`).join("")}</span>`;
 const NOMBRES = {CRITICAL:["Crítica","Críticas"],HIGH:["Alta","Altas"],MEDIUM:["Media","Medias"],LOW:["Baja","Bajas"],NONE:["Sin puntuar","Sin puntuar"]};
 
+// Texto de «solución» y «mitigación» que publica el fabricante. Se etiqueta, y la solución se omite si
+// solo repite versiones que ya están en la columna «Actualizar a» (p. ej. «WatchGuard AP 3.4.8»).
+function notasSolucion(r){
+  const arreglos = r.versiones.map(v => v.corregida).join(" ");
+  const versiones = t => t.match(/\d+(?:[.\-]\w+)+/g) || [];
+  const repetida = t => {
+    const vs = versiones(t);
+    const resto = vs.reduce((acc, v) => acc.replace(v, ""), t).replace(/\s+/g, " ").trim();
+    return vs.length > 0 && vs.every(v => arreglos.includes(v)) && resto.length <= 60;
+  };
+  return r.solucion.map(t => {
+    if (t.startsWith("Mitigación: ")) return `<p class="nota"><b>Mitigación.</b> ${esc(t.slice(12))}</p>`;
+    if (repetida(t)) return "";
+    return `<p class="nota"><b>Solución del fabricante.</b> ${esc(t)}</p>`;
+  }).join("");
+}
+
 function bloque(r){
   const s = sk(r.severidad);
   const epss = r.epss != null
@@ -918,7 +936,7 @@ function bloque(r){
     ? `<div class="check"><label for="v-${esc(r.cve)}">¿Me afecta? Tu versión</label>
          <input id="v-${esc(r.cve)}" data-ver="${esc(r.cve)}" placeholder="p. ej. 7.4.3" autocomplete="off" spellcheck="false"><output></output></div>`
     : "";
-  const sol = r.solucion.length ? `<p class="nota">${esc(r.solucion.join(" "))}</p>` : "";
+  const sol = notasSolucion(r);
   return `<details class="cve s-${s}" data-id="${esc(r.cve)}" data-kev="${r.explotada_kev?1:0}" data-q="${esc([r.cve,r.fabricante,r.producto,r.descripcion,r.cwe,r.versiones.map(v=>v.afectadas+" "+v.corregida).join(" ")].join(" ").toLowerCase())}">
     <summary>
       <div class="sc"><b>${r.cvss != null ? Number(r.cvss).toFixed(1) : "—"}</b>${ticks(r.cvss)}<small>${SEV[s] || "Sin puntuar"}</small></div>
