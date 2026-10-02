@@ -229,12 +229,17 @@ def _texto_celda(c):
     return " ".join(c.split())
 
 
+CISCO_TIMEOUT = 10        # segundos máximos de espera por aviso
+CISCO_PRUEBA = 3          # si los primeros avisos no responden, se deja de intentar en esta ejecución
+_cisco_no_responde = False
+
+
 def tabla_arreglos_cisco(url):
     """Lee la tabla «Release → First Fixed Release» del aviso de Cisco. Devuelve [{"rama", "corregida"}]."""
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (vulns-perimetrales)"})
-    with urllib.request.urlopen(req, timeout=30) as r:
+    with urllib.request.urlopen(req, timeout=CISCO_TIMEOUT) as r:
         pagina = r.read().decode("utf-8", errors="replace")
-    pagina = re.sub(r"<(script|style).*?</>", "", pagina, flags=re.S | re.I)   # código de la página, no contenido
+    pagina = re.sub(r"<(script|style)\b.*?</\1>", "", pagina, flags=re.S | re.I)   # código de la página, no contenido
     filas = []
     for tabla in re.findall(r"<table.*?</table>", pagina, re.S | re.I):
         if "first fixed release" not in tabla.lower():
@@ -249,7 +254,9 @@ def tabla_arreglos_cisco(url):
 
 def anadir_arreglos_fabricante(registros, ruta_cache):
     """Versiones corregidas por rama sacadas del propio aviso del fabricante (de momento, Cisco).
-    Se guardan en caché 7 días por aviso para no consultar la web de Cisco en cada ejecución."""
+    Se guardan en caché 7 días por aviso para no consultar la web de Cisco en cada ejecución.
+    Si la web de Cisco no responde, se abandona enseguida: esas CVEs muestran «Ver aviso»."""
+    global _cisco_no_responde
     cache = {}
     if ruta_cache and os.path.exists(ruta_cache):
         try:
@@ -258,7 +265,7 @@ def anadir_arreglos_fabricante(registros, ruta_cache):
         except (OSError, ValueError):
             cache = {}
     ahora = time.time()
-    urls = {r["aviso"] for r in registros if "sec.cloudapps.cisco.com" in r.get("aviso", "")}
+    urls = sorted({r["aviso"] for r in registros if "sec.cloudapps.cisco.com" in r.get("aviso", "")})
     pendientes = [u for u in urls if u not in cache or ahora - cache[u]["t"] > 7 * 86400]
 
     def leer(u):
@@ -268,13 +275,26 @@ def anadir_arreglos_fabricante(registros, ruta_cache):
             print(f"  ! Aviso de Cisco {u}: {e}", file=sys.stderr)
             return u, None
 
-    if pendientes:
+    if pendientes and not _cisco_no_responde:
         print(f"  Cisco: leyendo la tabla de versiones corregidas de {len(pendientes)} avisos…", file=sys.stderr)
-        from concurrent.futures import ThreadPoolExecutor
-        with ThreadPoolExecutor(4) as ex:
-            for u, filas in ex.map(leer, pendientes):
-                if filas is not None:
-                    cache[u] = {"t": ahora, "filas": filas}
+        # prueba: los primeros avisos de uno en uno; si ninguno responde, no se insiste
+        prueba, resto = pendientes[:CISCO_PRUEBA], pendientes[CISCO_PRUEBA:]
+        ok = 0
+        for u in prueba:
+            _, filas = leer(u)
+            if filas is not None:
+                cache[u] = {"t": ahora, "filas": filas}
+                ok += 1
+        if not ok:
+            _cisco_no_responde = True
+            print("  ! La web de Cisco no responde: se omiten sus tablas en esta ejecución (se mostrará «Ver aviso»).",
+                  file=sys.stderr)
+        elif resto:
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(4) as ex:
+                for u, filas in ex.map(leer, resto):
+                    if filas is not None:
+                        cache[u] = {"t": ahora, "filas": filas}
         if ruta_cache:
             with open(ruta_cache, "w", encoding="utf-8") as f:
                 json.dump(cache, f)
