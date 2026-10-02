@@ -71,22 +71,6 @@ def asunto(nuevas):
     return f"[Vulns perimetrales] {texto}{extra} — {detalle}"
 
 
-def cuerpo_texto(nuevas, url):
-    lineas = [f"Se han publicado {len(nuevas)} vulnerabilidades nuevas en productos perimetrales:", ""]
-    for r in nuevas:
-        score = f"{r['cvss']:.1f}" if r["cvss"] is not None else "sin puntuar"
-        lineas.append(f"- {r['cve']} · {r['fabricante']} · {r['producto']} · CVSS {score}"
-                      + ("  [EXPLOTADA - CISA KEV]" if r["explotada_kev"] else ""))
-        lineas.append(f"  {vp_extracto(r['descripcion'])}")
-        if versiones_arreglo(r):
-            lineas.append("  Actualizar a: " + ", ".join(versiones_arreglo(r)))
-        lineas.append(f"  {r['url']}")
-        lineas.append("")
-    if url:
-        lineas.append(f"Informe completo: {url}")
-    return "\n".join(lineas)
-
-
 def versiones_arreglo(r):
     """Versiones a las que actualizar (sin las entradas genéricas tipo «Consultar aviso»)."""
     return sorted({v["corregida"] for v in r["versiones"] if v["corregida"] != "Consultar aviso"})
@@ -99,42 +83,89 @@ def vp_extracto(texto, maximo=220):
     return primera if len(primera) <= maximo else primera[: maximo - 1] + "…"
 
 
+def prioridad(r):
+    return (100 if r["explotada_kev"] else 0) + (r["cvss"] or 0)
+
+
+def agrupar(nuevas):
+    """Igual que la web: fabricante → producto → CVEs, todo ordenado por gravedad (explotadas primero)."""
+    grupos = {}
+    for r in nuevas:
+        grupos.setdefault(r["fabricante"], {}).setdefault(r["producto"], []).append(r)
+    salida = []
+    for fab, prods in grupos.items():
+        lista = [(p, sorted(rs, key=prioridad, reverse=True)) for p, rs in prods.items()]
+        lista.sort(key=lambda x: prioridad(x[1][0]), reverse=True)
+        salida.append((fab, lista))
+    salida.sort(key=lambda x: (prioridad(x[1][0][1][0]), sum(len(rs) for _, rs in x[1])), reverse=True)
+    return salida
+
+
+def cuerpo_texto(nuevas, url):
+    lineas = [f"Se han publicado {len(nuevas)} vulnerabilidades nuevas en productos perimetrales.", ""]
+    for fab, prods in agrupar(nuevas):
+        lineas += [fab.upper(), "=" * len(fab), ""]
+        for prod, rs in prods:
+            lineas += [prod, "-" * len(prod)]
+            for r in rs:
+                score = f"{r['cvss']:.1f}" if r["cvss"] is not None else "sin puntuar"
+                lineas.append(f"* {r['cve']} · CVSS {score}" + ("  [EXPLOTADA - CISA KEV]" if r["explotada_kev"] else ""))
+                lineas.append(f"  {vp_extracto(r['descripcion'])}")
+                if versiones_arreglo(r):
+                    lineas.append("  Actualizar a: " + ", ".join(versiones_arreglo(r)))
+                lineas.append(f"  {r['url']}")
+            lineas.append("")
+    if url:
+        lineas.append(f"Informe completo: {url}")
+    return "\n".join(lineas)
+
+
 def cuerpo_html(nuevas, url):
     """HTML compatible con Outlook de escritorio (motor de Word): solo tablas de ancho fijo, estilos en
-    línea en cada celda y botón hecho con una celda de color. Nada de max-width, margin ni padding en <div>/<span>."""
+    línea en cada celda y botón hecho con una celda de color. Nada de max-width, margin ni padding en <div>/<span>.
+    Misma organización que la web: fabricante → producto → CVEs."""
     e = html.escape
     fuente = "font-family:'Segoe UI',Helvetica,Arial,sans-serif;"
-    filas = []
-    for i, r in enumerate(nuevas):
-        sev = r["severidad"] if r["severidad"] in SEV_ES else "NONE"
-        color = SEV_COLOR.get(sev, "#6b7280")
-        score = f"{r['cvss']:.1f}" if r["cvss"] is not None else "&mdash;"
-        borde = "border-top:1px solid #e5e7eb;" if i else ""
-        kev = ('&nbsp;&nbsp;<span style="color:#dc2626;font-size:11px;font-weight:bold;letter-spacing:1px;">'
-               '&#9679;&nbsp;EXPLOTADA</span>' if r["explotada_kev"] else "")
-        fixes = versiones_arreglo(r)
-        fix = (f'<tr><td style="{fuente}font-size:13px;color:#374151;padding-top:8px;">Actualizar a: '
-               f'<b style="color:#047857;">{e(", ".join(fixes))}</b></td></tr>') if fixes else ""
-        filas.append(f"""
+    serif = "font-family:Georgia,'Times New Roman',serif;"
+    bloques = []
+    for nf, (fab, prods) in enumerate(agrupar(nuevas)):
+        # fabricante
+        bloques.append(f"""
+        <tr><td colspan="2" style="{serif}font-size:26px;line-height:32px;color:#111827;padding:{'8' if nf == 0 else '32'}px 0 4px 0;">{e(fab)}</td></tr>""")
+        for prod, rs in prods:
+            # producto, con una línea debajo como en la web
+            bloques.append(f"""
+        <tr><td colspan="2" style="{fuente}font-size:15px;line-height:20px;font-weight:bold;color:#111827;padding:14px 0 8px 0;border-bottom:1px solid #111827;">{e(prod)}
+          <span style="font-weight:normal;font-size:11px;letter-spacing:1px;color:#6b7280;">&nbsp;&nbsp;{len(rs)} CVE{'S' if len(rs) != 1 else ''}</span></td></tr>""")
+            for i, r in enumerate(rs):
+                sev = r["severidad"] if r["severidad"] in SEV_ES else "NONE"
+                color = SEV_COLOR.get(sev, "#6b7280")
+                score = f"{r['cvss']:.1f}" if r["cvss"] is not None else "&mdash;"
+                borde = "border-top:1px solid #e5e7eb;" if i else ""
+                kev = ('&nbsp;&nbsp;<span style="color:#dc2626;font-size:11px;font-weight:bold;letter-spacing:1px;">'
+                       '&#9679;&nbsp;EXPLOTADA</span>' if r["explotada_kev"] else "")
+                fixes = versiones_arreglo(r)
+                fix = (f'<tr><td style="{fuente}font-size:13px;line-height:19px;color:#374151;padding-top:8px;">Actualizar a: '
+                       f'<b style="color:#047857;">{e(", ".join(fixes))}</b></td></tr>') if fixes else ""
+                bloques.append(f"""
         <tr>
-          <td width="70" valign="top" style="{fuente}{borde}padding:18px 0;width:70px;">
+          <td width="70" valign="top" style="{fuente}{borde}padding:16px 0;width:70px;">
             <div style="font-size:22px;font-weight:bold;color:{color};line-height:24px;">{score}</div>
             <div style="font-size:10px;font-weight:bold;letter-spacing:1px;text-transform:uppercase;color:{color};line-height:16px;">{e(SEV_ES.get(sev, 'Sin puntuar'))}</div>
           </td>
-          <td valign="top" style="{fuente}{borde}padding:18px 0;">
+          <td valign="top" style="{fuente}{borde}padding:16px 0;">
             <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
-              <tr><td style="{fuente}font-size:15px;line-height:22px;"><a href="{e(r['url'])}" style="color:#111827;font-weight:bold;text-decoration:none;">{e(r['cve'])}</a>{kev}</td></tr>
-              <tr><td style="{fuente}font-size:13px;line-height:20px;color:#6b7280;">{e(r['fabricante'])} &middot; {e(r['producto'])}</td></tr>
-              <tr><td style="{fuente}font-size:14px;line-height:21px;color:#374151;padding-top:6px;">{e(vp_extracto(r['descripcion']))}</td></tr>
+              <tr><td style="{fuente}font-size:15px;line-height:22px;"><a href="{e(r['url'])}" style="color:#111827;font-weight:bold;text-decoration:none;"><span style="color:#111827;">{e(r['cve'])}</span></a>{kev}</td></tr>
+              <tr><td style="{fuente}font-size:14px;line-height:21px;color:#374151;padding-top:4px;">{e(vp_extracto(r['descripcion']))}</td></tr>
               {fix}
             </table>
           </td>
         </tr>""")
     boton = f"""
-        <tr><td colspan="2" style="padding-top:24px;">
+        <tr><td colspan="2" style="padding-top:28px;">
           <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
             <td bgcolor="#111827" style="background-color:#111827;border-radius:20px;padding:11px 20px;{fuente}">
-              <a href="{e(url)}" style="color:#ffffff;font-size:14px;text-decoration:none;font-weight:bold;">Ver el informe completo</a>
+              <a href="{e(url)}" style="color:#ffffff;font-size:14px;text-decoration:none;font-weight:bold;"><span style="color:#ffffff;">Ver el informe completo</span></a>
             </td></tr></table>
         </td></tr>""" if url else ""
     n = len(nuevas)
@@ -145,12 +176,12 @@ def cuerpo_html(nuevas, url):
   <tr><td align="center" style="padding:24px 12px;">
     <table role="presentation" width="640" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff"
            style="width:640px;max-width:640px;background-color:#ffffff;border:1px solid #e5e7eb;">
-      <tr><td style="padding:28px 32px 8px 32px;{fuente}">
+      <tr><td style="padding:28px 32px 4px 32px;{fuente}">
         <div style="font-size:11px;letter-spacing:2px;text-transform:uppercase;color:#6b7280;">Seguridad perimetral</div>
-        <div style="font-family:Georgia,'Times New Roman',serif;font-size:28px;line-height:36px;color:#111827;padding-top:6px;">{titulo}</div>
+        <div style="{serif}font-size:32px;line-height:40px;color:#111827;padding-top:6px;padding-bottom:14px;border-bottom:1px solid #111827;">{titulo}</div>
       </td></tr>
       <tr><td style="padding:8px 32px 32px 32px;">
-        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">{''.join(filas)}{boton}
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">{''.join(bloques)}{boton}
         </table>
       </td></tr>
     </table>
