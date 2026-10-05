@@ -647,7 +647,7 @@ PLANTILLA_HTML = r"""<!doctype html>
 <html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Informe Vulnerabilidades</title>
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 2.5 4.5 6.8v8.4c0 7.3 4.9 12.6 11.5 14.3 6.6-1.7 11.5-7 11.5-14.3V6.8z' fill='%23111827'/%3E%3Cpath d='m10.5 16.2 3.7 3.7 7.3-7.6' fill='none' stroke='%23fff' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 2.5 4.5 6.8v8.4c0 7.3 4.9 12.6 11.5 14.3 6.6-1.7 11.5-7 11.5-14.3V6.8z' fill='%23C8102E'/%3E%3Cpath d='m10.5 16.2 3.7 3.7 7.3-7.6' fill='none' stroke='%23fff' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <meta name="theme-color" content="#f7f8fa">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -657,19 +657,20 @@ PLANTILLA_HTML = r"""<!doctype html>
    izquierda (fijo al hacer scroll) y sus CVEs a la derecha, separados por líneas finas. El color se
    reserva para la severidad y la explotación activa. Tema claro siempre; el oscuro solo con el botón. */
 :root{
-  --paper:#f7f8fa; --sheet:#ffffff; --ink:#111827; --text:#374151; --muted:#6b7280; --faint:#9ca3af;
-  --rule:#e5e7eb; --rule-strong:#d1d5db; --wash:#f3f4f6; --accent:#1e3a8a;
-  --crit:#86198f; --high:#c2410c; --med:#a16207; --low:#3f6212; --none:#6b7280;
-  --exploit:#dc2626; --exploit-wash:#fef2f2; --fix:#047857; --fix-wash:#ecfdf5;
+  /* paleta UPF: rojo #C8102E como acento, neutros y ámbar #C55A11 solo para avisos */
+  --paper:#f7f7f7; --sheet:#ffffff; --ink:#1A1A1A; --text:#333333; --muted:#666666; --faint:#999999;
+  --rule:#e3e3e3; --rule-strong:#cccccc; --wash:#f2f2f2; --accent:#C8102E;
+  --crit:#C8102E; --high:#C55A11; --med:#666666; --low:#999999; --none:#999999;
+  --exploit:#C8102E; --exploit-wash:#fbecee; --fix:#1A1A1A; --fix-wash:#f2f2f2;
   --f-display:"Instrument Serif",Georgia,"Times New Roman",serif;
   --f-body:"Geist",system-ui,-apple-system,"Segoe UI",sans-serif;
   color-scheme:light;
 }
 :root[data-theme="dark"]{
-  --paper:#0d1017; --sheet:#121620; --ink:#f3f4f6; --text:#d1d5db; --muted:#9ca3af; --faint:#6b7280;
-  --rule:#232937; --rule-strong:#323a4b; --wash:#171c27; --accent:#93b4ff;
-  --crit:#e879f9; --high:#fb923c; --med:#facc15; --low:#a3e635; --none:#9ca3af;
-  --exploit:#f87171; --exploit-wash:#2a1416; --fix:#34d399; --fix-wash:#0f2a21;
+  --paper:#121212; --sheet:#1a1a1a; --ink:#f2f2f2; --text:#d6d6d6; --muted:#a3a3a3; --faint:#757575;
+  --rule:#2b2b2b; --rule-strong:#3d3d3d; --wash:#202020; --accent:#ff5a6e;
+  --crit:#ff5a6e; --high:#e58a4e; --med:#a3a3a3; --low:#757575; --none:#757575;
+  --exploit:#ff5a6e; --exploit-wash:#3a1519; --fix:#f2f2f2; --fix-wash:#262626;
   color-scheme:dark;
 }
 *{box-sizing:border-box}
@@ -731,7 +732,7 @@ h1 em{font-style:italic;color:var(--muted)}
 /* Mis fabricantes: lista desplegable discreta */
 .mf{position:relative}
 .mf-panel{position:absolute;top:calc(100% + 12px);left:-16px;z-index:20;width:270px;background:var(--sheet);border:1px solid var(--rule-strong);
-  border-radius:12px;box-shadow:0 14px 34px rgba(17,24,39,.12);padding:14px 16px}
+  border-radius:12px;box-shadow:0 14px 34px rgba(26,26,26,.12);padding:14px 16px}
 .mf-panel h5{margin:0 0 6px;font:500 10.5px var(--f-body);letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
 .mf-list{display:grid;max-height:300px;overflow:auto}
 .mf-list label{display:flex;align-items:center;gap:10px;padding:5px 0;font-size:14px;color:var(--ink);cursor:pointer}
