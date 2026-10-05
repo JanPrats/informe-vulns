@@ -10,3 +10,6 @@ public/
 __pycache__/
 .estado_avisos.json
 .cache_nvd_avisos.json
+.alias_clientes.json
+*.xlsx
+inventario_alias*.csv

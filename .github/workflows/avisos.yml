@@ -9,6 +9,10 @@ on:
         description: "Enviar un correo de prueba con las 3 CVEs más recientes"
         type: boolean
         default: false
+      cves:
+        description: "Opcional, solo para la prueba: CVEs concretas del histórico (separadas por comas)"
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -47,4 +51,13 @@ jobs:
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
           INFORME_URL: https://janprats.github.io/informe-vulns/
           AVISO_FABRICANTES: ${{ vars.AVISO_FABRICANTES }}   # opcional: Settings > Secrets and variables > Actions > Variables
-        run: python avisos.py ${{ inputs.probar && '--probar' || '' }}
+          # inventario de clientes (opcional; ver preparar_inventario.py). Los nombres nunca se imprimen en los registros.
+          INVENTARIO_CLIENTES: ${{ secrets.INVENTARIO_CLIENTES }}
+          CLIENTES_NOMBRES: ${{ secrets.CLIENTES_NOMBRES }}
+          CVES_PRUEBA: ${{ inputs.cves }}
+        run: |
+          if [ "${{ inputs.probar }}" = "true" ]; then
+            if [ -n "$CVES_PRUEBA" ]; then python avisos.py --probar --cves "$CVES_PRUEBA"; else python avisos.py --probar; fi
+          else
+            python avisos.py
+          fi
