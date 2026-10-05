@@ -1,0 +1,272 @@
+{
+  "name": "Avisos de vulnerabilidades · clientes afectados",
+  "nodes": [
+    {
+      "id": "3b23f03a-c082-55b9-bdd7-33ddf55461f8",
+      "name": "Cada 10 minutos",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 10
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "98daa0df-1d31-56dc-b21f-69780fbda567",
+      "name": "Configuración",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// Nodo «Configuración». Cambia estos valores y guarda el flujo.\nreturn [{ json: {\n  // CVEs que publica GitHub cada 15 minutos (solo datos públicos de las CVEs, nada de clientes)\n  feed_url: 'https://raw.githubusercontent.com/JanPrats/informe-vulns/datos/novedades.json',\n\n  // Excel de clientes en SharePoint. Primera hoja, con la cabecera: Cliente | Fabricante | Producto | Versión\n  sharepoint_host: 'logicalis.sharepoint.com',\n  sharepoint_sitio: '/sites/NOMBRE-DEL-SITIO',\n  ruta_excel: 'Carpeta/clientes.xlsx',   // ruta dentro de la biblioteca «Documentos» del sitio\n\n  // Correo\n  de: 'remitente@logicalis.com',          // el de la cuenta SMTP\n  para: 'destinatario@logicalis.com',     // varios: separados por comas\n\n  // true = solo enviar correo si alguna CVE nueva afecta a algún cliente\n  solo_con_afectados: false,\n\n  // Pruebas: true = envía ya un correo con las CVEs de cves_prueba (o las 3 más recientes),\n  // sin marcar nada como avisado. Para probar con CVEs antiguas: feed_url = .../datos/prueba.json\n  probar: false,\n  cves_prueba: [],\n} }];\n"
+      }
+    },
+    {
+      "id": "63db545d-abab-592d-885c-6b95d5fd160d",
+      "name": "Descargar novedades",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        300
+      ],
+      "parameters": {
+        "url": "={{ $json.feed_url }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "5e9ecb70-c394-58d1-9c7a-f089759a4ef1",
+      "name": "CVEs sin avisar",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// Nodo «CVEs sin avisar»: se queda con las CVEs de novedades.json que todavía no se han avisado.\n// La primera ejecución activa solo las marca como avisadas, sin enviar nada, para no recibir de golpe\n// todo lo de los últimos días. (Las ejecuciones manuales no guardan este estado: usa «probar».)\nconst cfg = $('Configuración').first().json;\nconst feed = $input.first().json;\nconst cves = feed.cves || [];\nconst estado = $getWorkflowStaticData('global');\n\nlet nuevas;\nif (cfg.probar) {\n  const pedidas = (cfg.cves_prueba || []).map(c => String(c).trim().toUpperCase());\n  nuevas = pedidas.length\n    ? cves.filter(r => pedidas.includes(r.cve))\n    : [...cves].sort((a, b) => b.publicado.localeCompare(a.publicado)).slice(0, 3);\n} else {\n  if (!estado.avisadas) {\n    estado.avisadas = {};\n    const ahora = new Date().toISOString();\n    for (const r of cves) estado.avisadas[r.cve] = ahora;\n    return [];\n  }\n  nuevas = cves.filter(r => !(r.cve in estado.avisadas));\n}\n\nif (!nuevas.length) return [];\nreturn [{ json: {\n  nuevas,\n  feed: { equivalencias: feed.equivalencias, plantillas: feed.plantillas, informe_url: feed.informe_url },\n} }];\n"
+      }
+    },
+    {
+      "id": "aced816f-0e5a-5fe9-abea-ac99b7758b9e",
+      "name": "Buscar sitio SharePoint",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        300
+      ],
+      "parameters": {
+        "url": "=https://graph.microsoft.com/v1.0/sites/{{ $('Configuración').first().json.sharepoint_host }}:{{ $('Configuración').first().json.sharepoint_sitio }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "options": {}
+      }
+    },
+    {
+      "id": "4f70e1e9-61f0-5d45-99b7-e69a0fe7ee49",
+      "name": "Descargar Excel",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        300
+      ],
+      "parameters": {
+        "url": "=https://graph.microsoft.com/v1.0/sites/{{ $json.id }}/drive/root:/{{ encodeURI($('Configuración').first().json.ruta_excel) }}:/content",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "b601f565-3b72-520c-a508-c55e73c4ec94",
+      "name": "Leer Excel",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        1320,
+        300
+      ],
+      "parameters": {
+        "operation": "xlsx",
+        "options": {}
+      }
+    },
+    {
+      "id": "a0ea1c8d-dd31-5c08-ac1c-7e665e911544",
+      "name": "Cruzar con clientes",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// Nodo «Cruzar con clientes»: compara las CVEs nuevas con el Excel de clientes y monta el correo.\n// Entrada: una fila por equipo del Excel (Cliente | Fabricante | Producto | Versión).\n// Misma lógica que «¿Me afecta?» de la web. Estados de cada equipo afectado:\n//   explotable -> versión afectada y la CVE no exige ninguna configuración especial\n//   revisar    -> versión afectada, pero solo es explotable con cierta configuración (se indica cuál)\n//   version    -> el producto coincide, pero no se puede determinar si su versión está afectada\n\nconst cfg = $('Configuración').first().json;\nconst { nuevas, feed } = $('CVEs sin avisar').first().json;\nconst EQUIV = feed.equivalencias || {};\nconst P = feed.plantillas;\n\n// ----------------------------------------------------------------------------- inventario\nconst clave = t => String(t ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toLowerCase();\nconst inventario = [];\nfor (const item of $input.all()) {\n  const fila = {};\n  for (const [k, v] of Object.entries(item.json)) fila[clave(k)] = String(v ?? '').trim();\n  const eq = { cliente: fila.cliente, fabricante: fila.fabricante, producto: fila.producto, version: fila.version };\n  if (eq.cliente && eq.fabricante && eq.producto && eq.version) inventario.push(eq);\n}\nif (!inventario.length) {\n  throw new Error('El Excel no tiene filas válidas. La primera fila debe ser: Cliente | Fabricante | Producto | Versión');\n}\n\n// ----------------------------------------------------------------------------- versiones\n// «3.2.0 p7» = «3.2 Patch 7», «3.4.0» = «3.4», «14.1-73.37» = [14,1,73,37]\nconst RE_PARCHE = /^(.*?)(?:^|[\\s._-])p(?:atch)?\\s*\\.?\\s*(\\d+)\\b/i;\nconst digitos = t => (String(t).match(/\\d+/g) || []).map(Number);\n\nfunction numeros(t) {\n  t = String(t);\n  const m = t.match(RE_PARCHE);\n  let base, parche;\n  if (m && /\\d/.test(m[1])) { base = digitos(m[1]); parche = [Number(m[2])]; }\n  else { base = digitos(t); parche = []; }\n  while (base.length > 1 && base[base.length - 1] === 0) base.pop();\n  return base.concat(parche);\n}\n\nfunction comparar(a, b) {\n  for (let i = 0; i < Math.max(a.length, b.length); i++) {\n    const x = i < a.length ? a[i] : -1, y = i < b.length ? b[i] : -1;\n    if (x !== y) return x < y ? -1 : 1;\n  }\n  return 0;\n}\n\nfunction rango(t) {\n  let m;\n  if ((m = t.match(/^(.+?)\\s*→\\s*anteriores a (.+)$/i))) return { ini: m[1], fin: m[2], incl: false };\n  if ((m = t.match(/^anteriores a (.+)$/i))) return { fin: m[1], incl: false };\n  if ((m = t.match(/^(.+?)\\s*→\\s*(.+?) \\(incluida\\)$/i))) return { ini: m[1], fin: m[2], incl: true };\n  if ((m = t.match(/^hasta (.+?) \\(incluida\\)$/i))) return { fin: m[1], incl: true };\n  if (/^todas$/i.test(t)) return { todas: true };\n  return { exacta: t };\n}\n\nconst ramaDe = t => (String(t).match(/\\d+/g) || []).slice(0, 2).join('.');\n\nfunction arregloRama(r, rama) {\n  for (const f of r.arreglos || []) if (/^\\d/.test(f.rama) && ramaDe(f.rama) === rama) return f.corregida;\n  return null;\n}\n\n// ----------------------------------------------------------------------------- productos\nconst norm = t => String(t ?? '').toLowerCase().replace(/\\s+/g, ' ').trim();\n\nfunction clavesProducto(producto) {\n  const p = norm(producto), claves = new Set([p]);\n  for (const [k, v] of Object.entries(EQUIV)) if (p.includes(k)) v.forEach(x => claves.add(x));\n  return claves;\n}\n\nfunction coincideProducto(prodInventario, prodCve) {\n  const pc = norm(prodCve);\n  if (!pc) return false;\n  return [...clavesProducto(prodInventario)].some(c => c && (pc.includes(c) || norm(prodInventario).includes(pc)));\n}\n\nfunction coincideFabricante(a, b) {\n  a = norm(a); b = norm(b);\n  return !!a && !!b && (b.includes(a) || a.includes(b));\n}\n\n// ----------------------------------------------------------------------------- comparación\n// [afectada: true | false | null (no se puede determinar), versión a la que actualizar]\nfunction versionAfectada(r, filas, version) {\n  const v = numeros(version);\n  if (!v.length) return [null, null];\n  const esLista = filas.every(f => 'exacta' in rango(f.afectadas));\n  const coinciden = [];\n  for (const f of filas) {\n    const g = rango(f.afectadas);\n    let dentro;\n    if (g.todas) dentro = true;\n    else if ('exacta' in g) dentro = comparar(v, numeros(g.exacta)) === 0;\n    else {\n      const sobre = !g.ini || comparar(v, numeros(g.ini)) >= 0;\n      const c = comparar(v, numeros(g.fin));\n      dentro = sobre && (g.incl ? c <= 0 : c < 0);\n    }\n    if (dentro) {\n      const fin = numeros(g.fin || g.exacta || '');\n      let comun = 0;\n      while (comun < v.length && comun < fin.length && v[comun] === fin[comun]) comun++;\n      coinciden.push([comun, f]);\n    }\n  }\n  const delAviso = arregloRama(r, ramaDe(version));\n  if (coinciden.length) {\n    coinciden.sort((x, y) => y[0] - x[0]);\n    return [true, delAviso && /^\\d/.test(delAviso) ? delAviso : coinciden[0][1].corregida];\n  }\n  if (delAviso && /^\\d/.test(delAviso) && comparar(v, numeros(delAviso)) >= 0) return [false, null];\n  // con una lista de versiones sueltas no se puede afirmar «no afectada» si la rama aparece en la lista\n  if (esLista && filas.some(f => ramaDe(f.afectadas) === ramaDe(version))) return [null, null];\n  return [false, null];\n}\n\nconst ORDEN = { explotable: 0, revisar: 1, version: 2 };\n\nfunction afectados(r) {\n  const salida = [], condiciones = r.condiciones_explotacion || [];\n  for (const eq of inventario) {\n    if (!coincideFabricante(eq.fabricante, r.fabricante)) continue;\n    const filas = (r.versiones || []).filter(f => coincideProducto(eq.producto, f.producto));\n    if (!filas.length) {\n      // sin tabla de versiones de ese producto: solo se avisa si el producto aparece en la CVE\n      const texto = norm(`${r.producto || ''} ${r.descripcion || ''}`);\n      if (!(r.versiones || []).length && [...clavesProducto(eq.producto)].some(c => texto.includes(c))) {\n        salida.push({ ...eq, estado: 'version', arreglo: null, condiciones });\n      }\n      continue;\n    }\n    const [afectada, arreglo] = versionAfectada(r, filas, eq.version);\n    if (afectada === null) salida.push({ ...eq, estado: 'version', arreglo: null, condiciones });\n    else if (afectada) salida.push({ ...eq, estado: condiciones.length ? 'revisar' : 'explotable', arreglo, condiciones });\n  }\n  return salida.sort((a, b) => ORDEN[a.estado] - ORDEN[b.estado] || a.cliente.localeCompare(b.cliente, 'es'));\n}\n\n// ----------------------------------------------------------------------------- correo\nconst FUENTE = \"font-family:'Segoe UI',Helvetica,Arial,sans-serif;\";\nconst ESTADOS = {\n  explotable: ['Vulnerable y explotable', '#dc2626'],\n  revisar: ['Vulnerable por versión · revisar si es explotable', '#c2410c'],\n  version: ['Revisar versión', '#6b7280'],\n};\nconst esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')\n  .replace(/\"/g, '&quot;').replace(/'/g, '&#x27;');\nconst rellenar = (plantilla, valores) => Object.entries(valores).reduce((h, [k, v]) => h.split(k).join(v), plantilla);\n\nfunction htmlClientes(equipos) {\n  const titulo = `<tr><td style=\"${FUENTE}font-size:13px;line-height:19px;font-weight:bold;color:#111827;padding-top:12px;\">Clientes afectados:</td></tr>`;\n  if (!equipos.length) {\n    return titulo + `<tr><td style=\"${FUENTE}font-size:13px;line-height:19px;color:#6b7280;padding:2px 0 0 14px;\">&bull;&nbsp;Ninguno</td></tr>`;\n  }\n  return titulo + equipos.map(eq => {\n    const [etiqueta, color] = ESTADOS[eq.estado];\n    let detalle = '';\n    if (eq.estado === 'revisar' && eq.condiciones.length) {\n      detalle = `<br><span style=\"color:#6b7280;\">Solo explotable si: ${esc(eq.condiciones.join(' / '))}</span>`;\n    } else if (eq.estado === 'version') {\n      detalle = '<br><span style=\"color:#6b7280;\">No se puede determinar si esta versión está afectada: confírmalo en el aviso.</span>';\n    }\n    const arreglo = eq.arreglo && eq.arreglo !== 'Consultar aviso'\n      ? ` &rarr; actualizar a <b style=\"color:#111827;\">${esc(eq.arreglo)}</b>` : '';\n    return `<tr><td style=\"${FUENTE}font-size:13px;line-height:19px;color:#374151;padding:4px 0 0 14px;\">`\n      + `&bull;&nbsp;<b style=\"color:#111827;\">${esc(eq.cliente)}</b> · ${esc(eq.producto)} ${esc(eq.version)}`\n      + ` &mdash; <b style=\"color:${color};\">${esc(etiqueta)}</b>${arreglo}${detalle}</td></tr>`;\n  }).join('');\n}\n\nconst prioridad = r => (r.explotada_kev ? 100 : 0) + (r.cvss || 0);\n\n// Igual que la web: fabricante → producto → CVEs, todo ordenado por gravedad (explotadas primero)\nfunction agrupar(lista) {\n  const grupos = new Map();\n  for (const r of lista) {\n    if (!grupos.has(r.fabricante)) grupos.set(r.fabricante, new Map());\n    const prods = grupos.get(r.fabricante);\n    if (!prods.has(r.producto)) prods.set(r.producto, []);\n    prods.get(r.producto).push(r);\n  }\n  const salida = [...grupos].map(([fab, prods]) => {\n    const l = [...prods].map(([p, rs]) => [p, [...rs].sort((a, b) => prioridad(b) - prioridad(a))]);\n    l.sort((a, b) => prioridad(b[1][0]) - prioridad(a[1][0]));\n    return [fab, l];\n  });\n  const total = x => x[1].reduce((s, [, rs]) => s + rs.length, 0);\n  salida.sort((a, b) => prioridad(b[1][0][1][0]) - prioridad(a[1][0][1][0]) || total(b) - total(a));\n  return salida;\n}\n\nconst porCve = new Map(nuevas.map(r => [r.cve, afectados(r)]));\nconst conClientes = nuevas.filter(r => porCve.get(r.cve).length);\nconst lista = cfg.solo_con_afectados ? conClientes : nuevas;\nconst ids = nuevas.map(r => r.cve);\n\nif (!lista.length) {\n  // ninguna afecta a clientes y solo se quiere aviso cuando afectan: se marcan como avisadas sin enviar nada\n  if (!cfg.probar) {\n    const estado = $getWorkflowStaticData('global');\n    const ahora = new Date().toISOString();\n    for (const id of ids) estado.avisadas[id] = ahora;\n  }\n  return [];\n}\n\nconst bloques = [];\nagrupar(lista).forEach(([fab, prods], nf) => {\n  bloques.push(rellenar(nf === 0 ? P.fabricante_primero : P.fabricante, { '@@FABRICANTE@@': esc(fab) }));\n  for (const [prod, rs] of prods) {\n    bloques.push(rellenar(P.producto, { '@@PRODUCTO@@': esc(prod), '@@CUENTA@@': `${rs.length} CVE${rs.length !== 1 ? 'S' : ''}` }));\n    rs.forEach((r, i) => bloques.push(rellenar(r.html, {\n      '@@BORDE@@': i ? 'border-top:1px solid #e5e7eb;' : '',\n      '<!--CLIENTES-->': htmlClientes(porCve.get(r.cve)),\n    })));\n  }\n});\n\nconst n = lista.length;\nconst clientes = new Set(conClientes.flatMap(r => porCve.get(r.cve).map(eq => eq.cliente)));\nconst titulo = `${n} vulnerabilidad${n !== 1 ? 'es' : ''} nueva${n !== 1 ? 's' : ''}`;\nconst html = rellenar(P.pagina, { '@@TITULO@@': esc(titulo), '@@BLOQUES@@': bloques.join('') });\n\nconst peor = lista.reduce((a, b) => (prioridad(b) > prioridad(a) ? b : a));\nconst explotadas = lista.filter(r => r.explotada_kev).length;\nconst asunto = `[Vulns clientes] ${n} CVE${n !== 1 ? 's nuevas' : ' nueva'}`\n  + (explotadas ? ` · ${explotadas} explotada${explotadas > 1 ? 's' : ''}` : '')\n  + ` · ${clientes.size ? `${clientes.size} cliente${clientes.size > 1 ? 's' : ''} afectado${clientes.size > 1 ? 's' : ''}` : 'ningún cliente afectado'}`\n  + ` — ${peor.fabricante} ${peor.cve}` + (peor.cvss != null ? ` (${peor.cvss.toFixed(1)})` : '');\n\nreturn [{ json: { de: cfg.de, para: cfg.para, asunto, html, ids, clientes_afectados: clientes.size } }];\n"
+      }
+    },
+    {
+      "id": "f9f883ec-43c7-5f42-a385-530464078772",
+      "name": "Enviar correo",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1760,
+        300
+      ],
+      "parameters": {
+        "fromEmail": "={{ $json.de }}",
+        "toEmail": "={{ $json.para }}",
+        "subject": "={{ $json.asunto }}",
+        "emailFormat": "html",
+        "html": "={{ $json.html }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "0f5fba74-0de4-5e6f-a209-d2dd697511d1",
+      "name": "Marcar como avisadas",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// Nodo «Marcar como avisadas»: solo se llega aquí si el correo se ha enviado bien.\n// Si falla, no se marcan y se reintentan en la siguiente ejecución.\nconst cfg = $('Configuración').first().json;\nif (!cfg.probar) {\n  const estado = $getWorkflowStaticData('global');\n  const ahora = new Date();\n  for (const id of $('Cruzar con clientes').first().json.ids) estado.avisadas[id] = ahora.toISOString();\n  // se olvidan las avisadas hace más de 30 días (ya no pueden volver a aparecer en novedades.json)\n  const limite = new Date(ahora.getTime() - 30 * 864e5).toISOString();\n  for (const [id, cuando] of Object.entries(estado.avisadas)) if (cuando < limite) delete estado.avisadas[id];\n}\nreturn [{ json: { enviado: true } }];\n"
+      }
+    }
+  ],
+  "connections": {
+    "Cada 10 minutos": {
+      "main": [
+        [
+          {
+            "node": "Configuración",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Configuración": {
+      "main": [
+        [
+          {
+            "node": "Descargar novedades",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Descargar novedades": {
+      "main": [
+        [
+          {
+            "node": "CVEs sin avisar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CVEs sin avisar": {
+      "main": [
+        [
+          {
+            "node": "Buscar sitio SharePoint",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar sitio SharePoint": {
+      "main": [
+        [
+          {
+            "node": "Descargar Excel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Descargar Excel": {
+      "main": [
+        [
+          {
+            "node": "Leer Excel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Leer Excel": {
+      "main": [
+        [
+          {
+            "node": "Cruzar con clientes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cruzar con clientes": {
+      "main": [
+        [
+          {
+            "node": "Enviar correo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar correo": {
+      "main": [
+        [
+          {
+            "node": "Marcar como avisadas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

@@ -13,3 +13,7 @@ __pycache__/
 .alias_clientes.json
 *.xlsx
 inventario_alias*.csv
+
+# datos para n8n (se publican en la rama datos)
+novedades.json
+prueba.json

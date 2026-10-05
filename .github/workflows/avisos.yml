@@ -10,12 +10,12 @@ on:
         type: boolean
         default: false
       cves:
-        description: "Opcional, solo para la prueba: CVEs concretas del histórico (separadas por comas)"
+        description: "Opcional, solo para la prueba: CVEs concretas del histórico (separadas por comas). También se publican en prueba.json para probar n8n"
         type: string
         default: ""
 
 permissions:
-  contents: read
+  contents: write   # para publicar novedades.json en la rama «datos»
 
 concurrency:
   group: avisos
@@ -43,6 +43,7 @@ jobs:
           key: avisos-${{ github.run_id }}
           restore-keys: avisos-
 
+      # Aquí no hay ningún dato de clientes: el cruce con el inventario lo hace n8n, dentro de Logicalis.
       - name: Comprobar CVEs nuevas y avisar
         env:
           SMTP_USER: ${{ secrets.SMTP_USER }}
@@ -51,13 +52,30 @@ jobs:
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
           INFORME_URL: https://janprats.github.io/informe-vulns/
           AVISO_FABRICANTES: ${{ vars.AVISO_FABRICANTES }}   # opcional: Settings > Secrets and variables > Actions > Variables
-          # inventario de clientes (opcional; ver preparar_inventario.py). Los nombres nunca se imprimen en los registros.
-          INVENTARIO_CLIENTES: ${{ secrets.INVENTARIO_CLIENTES }}
-          CLIENTES_NOMBRES: ${{ secrets.CLIENTES_NOMBRES }}
           CVES_PRUEBA: ${{ inputs.cves }}
         run: |
           if [ "${{ inputs.probar }}" = "true" ]; then
-            if [ -n "$CVES_PRUEBA" ]; then python avisos.py --probar --cves "$CVES_PRUEBA"; else python avisos.py --probar; fi
+            if [ -n "$CVES_PRUEBA" ]; then python avisos.py --probar --cves "$CVES_PRUEBA" --novedades prueba.json; else python avisos.py --probar; fi
           else
             python avisos.py
           fi
+
+      # novedades.json (y prueba.json en las pruebas) en la rama «datos», con un único commit que se reemplaza
+      # cada vez. n8n lo lee de https://raw.githubusercontent.com/<repo>/datos/novedades.json
+      - name: Publicar para n8n
+        if: always() && (hashFiles('novedades.json') != '' || hashFiles('prueba.json') != '')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REMOTO="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if ! git clone -q --depth 1 --branch datos "$REMOTO" /tmp/datos 2>/dev/null; then
+            mkdir -p /tmp/datos && git -C /tmp/datos init -q -b datos && git -C /tmp/datos remote add origin "$REMOTO"
+          fi
+          for f in novedades.json prueba.json; do [ -f "$f" ] && cp -f "$f" /tmp/datos/; done
+          cd /tmp/datos
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -q --orphan nueva
+          git add -A
+          git commit -qm "Datos para n8n"
+          git push -qf origin nueva:datos

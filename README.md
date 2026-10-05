@@ -19,6 +19,16 @@ las CVEs del último año. La primera ejecución construye ese archivo (puede ta
 - Opcional: añade la clave gratuita del NVD como secreto `NVD_API_KEY`
   (Settings → Secrets and variables → Actions) para que la descarga sea más rápida y fiable.
 
+## Avisos por correo
+
+`avisos.py` se ejecuta cada 15 minutos (Actions → *Avisos por correo de CVEs nuevas*):
+
+- Envía un correo cuando aparecen CVEs nuevas. Este correo no incluye clientes.
+- Publica `novedades.json` en la rama `datos`.
+
+El cruce con el inventario de clientes lo hace n8n dentro de Logicalis: en este repositorio no hay ningún dato
+de clientes. Ver [n8n/LEEME.md](n8n/LEEME.md).
+
 ## Uso local
 
 ```bash
