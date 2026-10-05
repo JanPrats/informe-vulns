@@ -134,9 +134,9 @@ def cuerpo_texto(nuevas, url, afect=None):
                 lineas.append(f"  {vp_extracto(r['descripcion'])}")
                 if versiones_arreglo(r):
                     lineas.append("  Actualizar a: " + ", ".join(versiones_arreglo(r)))
+                lineas += texto_clientes_cve(r, afect)
                 lineas.append(f"  {r['url']}")
             lineas.append("")
-    lineas += texto_clientes(nuevas, afect)
     if url:
         lineas.append(f"Informe completo: {url}")
     return "\n".join(lineas)
@@ -180,6 +180,7 @@ def cuerpo_html(nuevas, url, afect=None):
               <tr><td style="{fuente}font-size:15px;line-height:22px;"><a href="{e(r['url'])}" style="color:#111827;font-weight:bold;text-decoration:none;"><span style="color:#111827;">{e(r['cve'])}</span></a>{kev}</td></tr>
               <tr><td style="{fuente}font-size:14px;line-height:21px;color:#374151;padding-top:4px;">{e(vp_extracto(r['descripcion']))}</td></tr>
               {fix}
+              {html_clientes_cve(r, afect, fuente)}
             </table>
           </td>
         </tr>""")
@@ -203,7 +204,7 @@ def cuerpo_html(nuevas, url, afect=None):
         <div style="{serif}font-size:32px;line-height:40px;color:#111827;padding-top:6px;padding-bottom:14px;border-bottom:1px solid #111827;">{titulo}</div>
       </td></tr>
       <tr><td style="padding:8px 32px 32px 32px;">
-        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">{''.join(bloques)}{html_clientes(nuevas, afect, fuente, serif)}{boton}
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">{''.join(bloques)}{boton}
         </table>
       </td></tr>
     </table>
@@ -248,63 +249,53 @@ def calcular_afectados(nuevas, clientes):
     return {"por_cve": {k: v for k, v in por_cve.items() if v}, "nombres": clientes["nombres"]}
 
 
-def texto_clientes(nuevas, afect):
+def texto_clientes_cve(r, afect):
+    """Líneas de texto con los clientes afectados por una CVE (vacío si no hay inventario cargado)."""
     if afect is None:
         return []
-    lineas = ["", "CLIENTES AFECTADOS", "==================", ""]
-    if not afect["por_cve"]:
-        return lineas + ["Ningún cliente del inventario está afectado por estas CVEs.", ""]
-    for r in nuevas:
-        for eq in afect["por_cve"].get(r["cve"], []):
-            nombre = afect["nombres"].get(eq["alias"], eq["alias"])
-            lineas.append(f"* {nombre} · {eq['producto']} {eq['version']} · {r['cve']} · {ESTADOS[eq['estado']][0]}"
-                          + (f" · actualizar a {eq['arreglo']}" if eq.get("arreglo") and eq["arreglo"] != "Consultar aviso" else ""))
-            if eq["estado"] == "revisar":
-                lineas.append(f"  Condición: {' / '.join(eq['condiciones'])}")
-    return lineas + [""]
+    lineas = ["  Clientes afectados:"]
+    equipos = afect["por_cve"].get(r["cve"], [])
+    if not equipos:
+        return lineas + ["    - Ninguno"]
+    for eq in equipos:
+        nombre = afect["nombres"].get(eq["alias"], eq["alias"])
+        arreglo = eq.get("arreglo")
+        lineas.append(f"    - {nombre} · {eq['producto']} {eq['version']} — {ESTADOS[eq['estado']][0]}"
+                      + (f" → actualizar a {arreglo}" if arreglo and arreglo != "Consultar aviso" else ""))
+        if eq["estado"] == "revisar" and eq["condiciones"]:
+            lineas.append(f"      Solo explotable si: {' / '.join(eq['condiciones'])}")
+        elif eq["estado"] == "version":
+            lineas.append("      No se puede determinar si esta versión está afectada: confírmalo en el aviso.")
+    return lineas
 
 
-def html_clientes(nuevas, afect, fuente, serif):
+def html_clientes_cve(r, afect, fuente):
+    """Filas (dentro del bloque de la CVE) con la lista de clientes afectados, o «Ninguno»."""
     if afect is None:
         return ""
     e = html.escape
-    filas = [f"""
-        <tr><td colspan="2" style="{serif}font-size:26px;line-height:32px;color:#111827;padding:36px 0 4px 0;">Clientes afectados</td></tr>"""]
-    if not afect["por_cve"]:
-        filas.append(f"""
-        <tr><td colspan="2" style="{fuente}font-size:14px;color:#374151;padding:8px 0;">Ningún cliente del inventario está afectado por estas CVEs.</td></tr>""")
-        return "".join(filas)
-    for r in nuevas:
-        equipos = afect["por_cve"].get(r["cve"])
-        if not equipos:
-            continue
-        filas.append(f"""
-        <tr><td colspan="2" style="{fuente}font-size:15px;line-height:20px;font-weight:bold;color:#111827;padding:14px 0 8px 0;border-bottom:1px solid #111827;">{e(r['cve'])}
-          <span style="font-weight:normal;font-size:13px;color:#6b7280;">&nbsp;&nbsp;{e(r['fabricante'])} · {e(r['producto'])}</span></td></tr>""")
-        for i, eq in enumerate(equipos):
-            etiqueta, color, fondo = ESTADOS[eq["estado"]]
-            nombre = afect["nombres"].get(eq["alias"], eq["alias"])
-            borde = "border-top:1px solid #e5e7eb;" if i else ""
-            arreglo = eq.get("arreglo")
-            arreglo_html = (f'<tr><td style="{fuente}font-size:13px;color:#374151;padding-top:4px;">Actualizar a: '
-                            f'<b style="color:#047857;">{e(arreglo)}</b></td></tr>') if arreglo and arreglo != "Consultar aviso" else ""
-            cond_html = ""
-            if eq["estado"] == "revisar" and eq["condiciones"]:
-                cond_html = (f'<tr><td style="{fuente}font-size:13px;line-height:19px;color:#374151;padding:6px 0 0 10px;'
-                             f'border-left:3px solid #c2410c;">Solo explotable si: {e(" / ".join(eq["condiciones"]))}</td></tr>')
-            elif eq["estado"] == "version":
-                cond_html = (f'<tr><td style="{fuente}font-size:13px;color:#6b7280;padding-top:4px;">No se puede determinar '
-                             f'si esta versión está afectada: confírmalo en el aviso del fabricante.</td></tr>')
-            filas.append(f"""
-        <tr><td colspan="2" style="{fuente}{borde}padding:12px 0;">
-          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
-            <tr><td style="{fuente}font-size:15px;line-height:22px;"><b style="color:#111827;">{e(nombre)}</b>
-              <span style="color:#374151;">&nbsp;·&nbsp;{e(eq['producto'])} {e(eq['version'])}</span></td></tr>
-            <tr><td style="{fuente}padding-top:4px;"><span style="background-color:{fondo};color:{color};font-size:11px;font-weight:bold;letter-spacing:1px;">&nbsp;{e(etiqueta.upper())}&nbsp;</span></td></tr>
-            {arreglo_html}{cond_html}
-          </table>
-        </td></tr>""")
-    return "".join(filas)
+    equipos = afect["por_cve"].get(r["cve"], [])
+    titulo = (f'<tr><td style="{fuente}font-size:13px;line-height:19px;font-weight:bold;color:#111827;padding-top:12px;">'
+              f'Clientes afectados:</td></tr>')
+    if not equipos:
+        return titulo + f'<tr><td style="{fuente}font-size:13px;line-height:19px;color:#6b7280;padding:2px 0 0 14px;">&bull;&nbsp;Ninguno</td></tr>'
+    items = []
+    for eq in equipos:
+        etiqueta, color, _ = ESTADOS[eq["estado"]]
+        nombre = afect["nombres"].get(eq["alias"], eq["alias"])
+        arreglo = eq.get("arreglo")
+        detalle = ""
+        if eq["estado"] == "revisar" and eq["condiciones"]:
+            detalle = f'<br><span style="color:#6b7280;">Solo explotable si: {e(" / ".join(eq["condiciones"]))}</span>'
+        elif eq["estado"] == "version":
+            detalle = '<br><span style="color:#6b7280;">No se puede determinar si esta versión está afectada: confírmalo en el aviso.</span>'
+        items.append(
+            f'<tr><td style="{fuente}font-size:13px;line-height:19px;color:#374151;padding:4px 0 0 14px;">'
+            f'&bull;&nbsp;<b style="color:#111827;">{e(nombre)}</b> · {e(eq["producto"])} {e(eq["version"])}'
+            f' &mdash; <b style="color:{color};">{e(etiqueta)}</b>'
+            + (f' &rarr; actualizar a <b style="color:#111827;">{e(arreglo)}</b>' if arreglo and arreglo != "Consultar aviso" else "")
+            + f'{detalle}</td></tr>')
+    return titulo + "".join(items)
 
 
 def enviar(nuevas, url, afect=None):
