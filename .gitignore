@@ -17,3 +17,6 @@ inventario_alias*.csv
 # datos para n8n (se publican en la rama datos)
 novedades.json
 prueba.json
+
+# instrucciones de Claude Code (solo en este PC)
+CLAUDE.local.md

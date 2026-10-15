@@ -1,7 +1,7 @@
 # Informe de vulnerabilidades perimetrales
 
 Listado de CVEs recientes en productos de seguridad perimetral (Palo Alto, Fortinet, Cisco, Check Point,
-SonicWall, Juniper, F5, Citrix, Ivanti, Sophos, WatchGuard, etc.), agrupados por fabricante y producto, con
+F5, Citrix, WatchGuard, Zscaler, etc.), agrupados por fabricante y producto, con
 requisitos de explotación y versiones a las que actualizar.
 
 Fuentes: NVD (NIST), CVE.org y CISA KEV.

@@ -23,13 +23,9 @@ EQUIVALENCIAS = {
     "netscaler": ["adc", "netscaler", "gateway"], "citrix adc": ["adc", "netscaler"], "citrix gateway": ["gateway"],
     "firebox": ["fireware"], "fireware": ["fireware"],
     "big-ip": ["big-ip"], "f5": ["big-ip"],
-    "srx": ["junos"], "junos": ["junos"],
-    "tz": ["sonicos"], "nsa": ["sonicos"], "sonicos": ["sonicos"], "sma": ["sma"],
     "quantum": ["quantum", "gaia"], "gaia": ["gaia"], "check point": ["quantum", "gaia"],
     "client connector": ["client connector"], "zscaler": ["zscaler", "client connector"],
-    "netskope": ["netskope"], "cato": ["cato"], "warp": ["warp"], "cloudflared": ["cloudflared"],
-    "xg": ["sophos firewall", "xg"], "sophos": ["sophos firewall", "sophos"],
-    "usg flex": ["usg flex"], "zywall": ["zywall", "usg"], "atp": ["atp"],
+    "netskope": ["netskope"], "warp": ["warp"], "cloudflared": ["cloudflared"],
 }
 
 
