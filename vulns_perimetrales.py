@@ -915,8 +915,6 @@ footer{font-family:var(--f-mono);font-size:11px;letter-spacing:.3px}
 
 /* ---------- ajuste fino con el trazador: logo oscuro, barra de herramientas en tarjeta flotante,
    botones secundarios con borde (hover rojo) y etiquetas en mono ---------- */
-.logo{background:#1A1A1A;color:#ff5a6e}
-:root[data-theme="dark"] .logo{background:#262626}
 .tools{background:transparent;border-bottom:0;padding-top:14px;pointer-events:none}
 .tools .wrap>*{pointer-events:auto}
 .tb{background:var(--sheet);border:1px solid var(--rule);border-radius:999px;box-shadow:var(--sombra-flota);padding:6px 6px 6px 8px;gap:8px}
@@ -941,6 +939,50 @@ footer{font-family:var(--f-mono);font-size:11px;letter-spacing:.3px}
 @media (max-width:640px){
   .tools{padding-top:10px}
   .tb{border-radius:14px;padding:10px}
+}
+
+/* ---------- fabricantes en billete: cabecera sobre papel algo más oscuro, corte discontinuo con muescas ---------- */
+.vendor{--vpx:clamp(18px,3vw,36px);padding:32px var(--vpx);overflow:hidden}
+.vside{position:relative;margin:-32px calc(-1 * var(--vpx)) 26px;padding:28px var(--vpx) 22px;background:color-mix(in srgb,var(--ink) 3.5%,var(--sheet));border-bottom:1px dashed var(--rule-strong)}
+.vside::before,.vside::after{content:"";position:absolute;bottom:-9px;width:18px;height:18px;border-radius:50%;background:var(--paper);border:1px solid var(--rule)}
+.vside::before{left:-10px} .vside::after{right:-10px}
+
+/* cabecera plegable: pulsar el fabricante pliega o despliega su caja; plegada, solo queda la cabecera con el recuento */
+.vside{display:flex;align-items:baseline;gap:16px;cursor:pointer;user-select:none}
+.vside:hover h2{color:var(--accent)}
+.vside:focus-visible{outline:2px solid var(--accent);outline-offset:-4px;border-radius:12px 12px 0 0}
+.vcuenta{margin-left:auto;font:500 11px var(--f-mono);letter-spacing:.6px;text-transform:uppercase;color:var(--muted);white-space:nowrap}
+.vcuenta .x{color:var(--exploit)}
+.chev{align-self:center;flex:none;width:30px;height:30px;border:1px solid var(--rule-strong);border-radius:50%;background:var(--sheet);position:relative;transition:border-color .15s,transform .25s}
+.chev::before{content:"";position:absolute;left:50%;top:50%;width:7px;height:7px;border-right:1.6px solid var(--muted);border-bottom:1.6px solid var(--muted);transform:translate(-50%,-70%) rotate(45deg)}
+.vside:hover .chev{border-color:var(--accent)}
+.vside:hover .chev::before{border-color:var(--accent)}
+.vendor.plegado .chev{transform:rotate(-90deg)}
+.vendor.plegado{padding-bottom:0}
+.vendor.plegado>div{display:none}
+.vendor.plegado .vside{margin-bottom:0;border-bottom:0}
+.vendor.plegado .vside::before,.vendor.plegado .vside::after{display:none}
+@media (max-width:640px){ .vside{flex-wrap:wrap;gap:6px 12px} .vcuenta{margin-left:0;order:3;flex-basis:100%} .chev{position:absolute;right:16px;top:22px} }
+
+/* ---------- hilo por producto: las CVEs cuelgan de una línea discontinua, con un punto por CVE ---------- */
+.cve{position:relative;padding-left:26px}
+.cve::before{content:"";position:absolute;left:6px;top:0;bottom:0;border-left:1.5px dashed var(--rule-strong)}
+.cve:first-of-type::before{top:27px}
+.cve:last-of-type::before{bottom:auto;height:27px}
+.cve:only-of-type::before{display:none}
+.cve::after{content:"";position:absolute;left:1px;top:22px;width:11px;height:11px;border-radius:50%;background:var(--sheet);border:1.5px solid var(--rule-strong);box-sizing:border-box;transition:border-color .15s,background .15s}
+.cve:hover::after,.cve[open]::after{border-color:var(--ink)}
+.cve[open]::after{background:var(--ink)}
+
+/* ---------- explotadas: banda rosa suave y tramo del hilo en rojo continuo ---------- */
+.cve[data-kev="1"]{background:linear-gradient(to right,color-mix(in srgb,var(--exploit) 7%,transparent),color-mix(in srgb,var(--exploit) 2%,transparent) 70%,transparent);border-radius:10px 0 0 10px}
+.cve[data-kev="1"]::before{border-left:2px solid var(--exploit)}
+.cve[data-kev="1"]::after{background:var(--exploit);border-color:var(--exploit);box-shadow:0 0 0 4px color-mix(in srgb,var(--exploit) 16%,transparent)}
+
+@media (max-width:900px){ .vendor{--vpx:22px;padding:26px var(--vpx)} .vside{margin-top:-26px} }
+@media (max-width:640px){
+  .vendor{--vpx:16px;padding:22px var(--vpx)} .vside{margin-top:-22px;padding-top:22px;padding-bottom:18px}
+  .cve{padding-left:20px} .cve::before{left:4px} .cve::after{left:0;width:10px;height:10px}
 }
 </style></head>
 <body>
@@ -1201,10 +1243,12 @@ function render(){
       <span class="tq">${todos.length} CVE${todos.length>1?"s":""}${kevn ? ` · <span class="x">${kevn} expl.</span>` : ""}</span></a>`;
   }).join("");
 
-  $("main").innerHTML = fabs.length ? fabs.map(({f}, i) => {
+  $("main").innerHTML = fabs.length ? fabs.map(({f, todos}, i) => {
     const prods = Object.entries(grupos[f]).sort((a,b) => Math.max(...b[1].map(prio)) - Math.max(...a[1].map(prio)));
-    return `<section class="vendor" id="${slug(f)}">
-      <header class="vside"><span class="vno">${num(i)} / ${String(fabs.length).padStart(2, "0")}</span><h2>${esc(f)}</h2></header>
+    const kevn = todos.filter(r => r.explotada_kev).length, pleg = plegados.has(f);
+    return `<section class="vendor${pleg ? " plegado" : ""}" id="${slug(f)}" data-fab="${esc(f)}">
+      <header class="vside" role="button" tabindex="0" aria-expanded="${!pleg}" title="Plegar o desplegar ${esc(f)}"><span class="vno">${num(i)} / ${String(fabs.length).padStart(2, "0")}</span><h2>${esc(f)}</h2>
+        <span class="vcuenta">${todos.length} CVE${todos.length>1?"s":""}${kevn ? ` · <span class="x">${kevn} expl.</span>` : ""}</span><span class="chev" aria-hidden="true"></span></header>
       <div>${prods.map(([p, rows]) => `<div class="product"><div class="phead"><h3>${esc(p)}</h3><span>${rows.length} CVE${rows.length>1?"s":""}</span></div>
         ${rows.sort((a,b)=>prio(b)-prio(a)).map(bloque).join("")}</div>`).join("")}</div>
     </section>`;
@@ -1294,6 +1338,27 @@ function meAfecta(r, texto){
   coinciden.sort((a, b) => b.comun - a.comun);
   return coinciden.map(c => c.fila);
 }
+// cajas de fabricante plegables: se recuerda en este navegador cuáles están plegadas
+const plegados = new Set(store.get("vp-plegados") || []);
+function plegar(v){
+  const si = v.classList.toggle("plegado");
+  v.querySelector(".vside").setAttribute("aria-expanded", String(!si));
+  si ? plegados.add(v.dataset.fab) : plegados.delete(v.dataset.fab);
+  store.set("vp-plegados", [...plegados]);
+}
+$("main").addEventListener("click", e => {
+  const h = e.target.closest(".vside");
+  if (h) plegar(h.closest(".vendor"));
+});
+// ir a un fabricante desde el índice lo despliega si estaba plegado
+$("index").addEventListener("click", e => {
+  const a = e.target.closest("a[href^='#']"), v = a && document.getElementById(a.getAttribute("href").slice(1));
+  if (v && v.classList.contains("plegado")) plegar(v);
+});
+$("main").addEventListener("keydown", e => {
+  const h = e.target.closest(".vside");
+  if (h && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); plegar(h.closest(".vendor")); }
+});
 $("main").addEventListener("input", e => {
   const inp = e.target.closest("input[data-ver]");
   if (!inp) return;
