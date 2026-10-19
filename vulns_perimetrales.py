@@ -629,11 +629,11 @@ PLANTILLA_HTML = r"""<!doctype html>
 <html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Informe Vulnerabilidades</title>
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 2.5 4.5 6.8v8.4c0 7.3 4.9 12.6 11.5 14.3 6.6-1.7 11.5-7 11.5-14.3V6.8z' fill='%23C8102E'/%3E%3Cpath d='m10.5 16.2 3.7 3.7 7.3-7.6' fill='none' stroke='%23fff' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%231A1A1A'/%3E%3Cg transform='translate(4 4)' fill='none' stroke='%23ff5a6e' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3 4.5 6v5.5c0 4.6 3.2 8.3 7.5 9.5 4.3-1.2 7.5-4.9 7.5-9.5V6z'/%3E%3Cpath d='m8.8 12.2 2.2 2.2 4.2-4.4'/%3E%3C/g%3E%3C/svg%3E">
 <meta name="theme-color" content="#f7f8fa">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 /* Concepto: dossier de avisos de seguridad. Cada fabricante es un capítulo: el nombre en serif a la
    izquierda (fijo al hacer scroll) y sus CVEs a la derecha, separados por líneas finas. El color se
@@ -847,16 +847,114 @@ footer{padding-block:40px 64px;display:flex;justify-content:space-between;gap:16
   .mf-panel{left:0;right:0;width:auto;top:calc(100% + 4px)}
   .check input{width:100%}
 }
+/* ---------- estética del trazador de flujos (rediseño): barra superior con logo y línea roja, fondo de puntos,
+   tarjetas con sombra suave, pastillas y Geist Mono para las etiquetas. Lo estructural no cambia. ---------- */
+:root{--f-mono:"Geist Mono",ui-monospace,Consolas,monospace;--punto:#d8d8d4;
+  --sombra:0 1px 2px rgba(0,0,0,.04),0 8px 24px -14px rgba(0,0,0,.14);
+  --sombra-flota:0 2px 4px rgba(0,0,0,.05),0 10px 28px -12px rgba(0,0,0,.22)}
+:root[data-theme="dark"]{--punto:#2a2a2a;
+  --sombra:0 1px 2px rgba(0,0,0,.3),0 10px 28px -14px rgba(0,0,0,.6);
+  --sombra-flota:0 2px 4px rgba(0,0,0,.4),0 12px 30px -12px rgba(0,0,0,.75)}
+body{background-color:var(--paper);background-image:radial-gradient(var(--punto) 1.2px,transparent 1.6px);background-size:22px 22px;background-attachment:fixed}
+
+/* barra superior */
+.top{background:var(--sheet);border-bottom:2px solid var(--accent);padding-top:14px}
+.top .wrap{padding-bottom:0}
+.mrow{justify-content:space-between;align-items:center;gap:12px}
+.brand{display:flex;align-items:center;gap:12px;min-width:0}
+.logo{display:grid;place-items:center;width:34px;height:34px;border-radius:9px;background:var(--paper);color:var(--accent);flex:none}
+.brand h1{font:400 clamp(30px,4.2vw,40px)/1.05 var(--f-display);letter-spacing:.005em;margin:0;color:var(--ink);text-wrap:balance}
+.brand h1 em{font-style:italic;color:var(--muted)}
+.status{font:500 11px/1 var(--f-mono);letter-spacing:.3px;padding:8px 12px}
+.ghost{width:34px;height:34px}
+.views{margin-top:14px}
+.toc{margin-top:0;border-top:0;border-bottom:0;padding-block:14px 16px}
+.tabs{display:inline-flex;gap:2px;background:var(--paper);border:1px solid var(--rule);border-radius:999px;padding:3px}
+.tabs button{padding:5px 14px;border-radius:999px;border-bottom:0;font:500 13px var(--f-body);transition:background .15s,color .15s}
+.tabs button[aria-selected="true"]{background:var(--sheet);color:var(--ink);border-bottom:0;box-shadow:0 1px 2px rgba(0,0,0,.08),0 0 0 1px var(--rule)}
+.tabs button:hover:not([aria-selected="true"]){color:var(--ink)}
+.presets button,.range input[type=date]{background:var(--paper);border-color:var(--rule)}
+.presets button.on{background:var(--ink);border-color:var(--ink)}
+.toc .tc,.toc .tq{font-family:var(--f-mono)}
+
+/* herramientas: barra fija con fondo de hoja, búsqueda en pastilla y botón principal en rojo */
+.tools{background:var(--sheet);border-bottom:1px solid var(--rule);backdrop-filter:none}
+.search{border:1px solid var(--rule-strong);border-radius:999px;padding:6px 14px;background:var(--paper);min-height:34px}
+.search:focus-within{border-color:var(--accent);color:var(--ink)}
+.tb select{background:var(--paper);height:34px}
+.go{background:var(--accent);box-shadow:0 1px 0 rgba(255,255,255,.15) inset,0 4px 12px -4px color-mix(in srgb,var(--accent) 60%,transparent)}
+.go:hover{background:var(--accent);opacity:.9}
+.estado{font-family:var(--f-mono);font-size:11px;letter-spacing:.3px}
+
+/* capítulos por fabricante: tarjetas */
+.vendor{background:var(--sheet);border:1px solid var(--rule);border-radius:14px;box-shadow:var(--sombra);padding:32px clamp(18px,3vw,36px);margin-block:18px;scroll-margin-top:96px}
+.vendor + .vendor{margin-top:18px}
+.vendor:first-child{margin-top:24px}
+.vno,.phead span,.sec>h4,.spec dt,.sc small,.toc .tc,.toc .tq,.vtable th,.copy::after,.status{font-family:var(--f-mono)}
+.vtable th{font-size:10px;letter-spacing:.8px}
+.vtable{border-radius:10px;overflow:hidden;border:1px solid var(--rule-strong)}
+.body{margin-left:112px}
+.vtable th{background:var(--paper)}
+.cve{border-bottom-color:var(--rule)}
+.flag{font-family:var(--f-mono);font-size:10px;letter-spacing:.6px}
+
+/* pie */
+footer{font-family:var(--f-mono);font-size:11px;letter-spacing:.3px}
+
+@media (max-width:900px){ body{background-attachment:scroll} .vendor{padding:26px 22px} }
+@media (max-width:640px){
+  .top{padding-top:12px}
+  .brand h1{font-size:28px}
+  .logo{width:30px;height:30px}
+  .vendor{padding:22px 16px;margin-block:12px;border-radius:12px}
+  .vendor:first-child{margin-top:16px}
+  .vendor + .vendor{margin-top:12px}
+  .body{margin-left:0}
+  .toc{padding-block:10px 12px}
+}
+
+/* ---------- ajuste fino con el trazador: logo oscuro, barra de herramientas en tarjeta flotante,
+   botones secundarios con borde (hover rojo) y etiquetas en mono ---------- */
+.logo{background:#1A1A1A;color:#ff5a6e}
+:root[data-theme="dark"] .logo{background:#262626}
+.tools{background:transparent;border-bottom:0;padding-top:14px;pointer-events:none}
+.tools .wrap>*{pointer-events:auto}
+.tb{background:var(--sheet);border:1px solid var(--rule);border-radius:999px;box-shadow:var(--sombra-flota);padding:6px 6px 6px 8px;gap:8px}
+.search{border-color:transparent;background:var(--paper)}
+.link{display:inline-flex;align-items:center;height:34px;padding:0 14px;border:1px solid var(--rule-strong);border-radius:999px;background:var(--sheet);text-decoration:none;font-size:13px;font-weight:500;transition:border-color .15s,color .15s}
+.link:hover{color:var(--accent);border-color:var(--accent);text-decoration:none}
+.mf-foot .link{height:28px;padding:0 12px}
+.mf-panel{border-radius:14px;border-color:var(--rule);box-shadow:var(--sombra-flota)}
+.mf-panel h5,.range>span,.check{font-family:var(--f-mono);letter-spacing:.8px}
+.mf-panel h5,.range>span{font-size:10.5px;text-transform:uppercase}
+.mf-list input{accent-color:var(--accent)}
+.tb select{border-color:var(--rule-strong);font-weight:500}
+.tb select:hover,.presets button:hover,.ghost:hover,.status:hover{border-color:var(--accent);color:var(--accent)}
+.ghost{transition:border-color .15s,color .15s}
+.presets button.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.go{height:34px}
+.estado{padding:8px 4px 0}
+.cve>summary:hover .plus,.copy:hover{border-color:var(--accent);color:var(--accent)}
+.check input:focus{border-color:var(--accent)}
+.phead{border-bottom-color:var(--rule-strong)}
+.vside h2{transition:color .15s}
+@media (max-width:640px){
+  .tools{padding-top:10px}
+  .tb{border-radius:14px;padding:10px}
+}
 </style></head>
 <body>
-<header class="wrap masthead">
+<header class="top"><div class="wrap">
   <div class="mrow">
+    <div class="brand">
+      <div class="logo"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4.5 6v5.5c0 4.6 3.2 8.3 7.5 9.5 4.3-1.2 7.5-4.9 7.5-9.5V6z"/><path d="m8.8 12.2 2.2 2.2 4.2-4.4"/></svg></div>
+      <h1>Informe <em>Vulnerabilidades</em></h1>
+    </div>
     <div class="meta-r">
       <span class="status" id="status"><span class="dot"></span><span id="statustxt"></span></span>
       <button class="ghost" id="theme" title="Cambiar a tema oscuro" aria-label="Cambiar tema"><svg class="i" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg></button>
     </div>
   </div>
-  <h1>Informe <em>Vulnerabilidades</em></h1>
   <div class="views">
     <div class="tabs" role="tablist" aria-label="Vista">
       <button role="tab" id="tab-rec" aria-selected="true"></button>
@@ -872,7 +970,7 @@ footer{padding-block:40px 64px;display:flex;justify-content:space-between;gap:16
     </div>
   </div>
   <nav class="toc" id="index"></nav>
-</header>
+</div></header>
 
 <div class="tools"><div class="wrap">
   <div class="tb">
