@@ -103,9 +103,11 @@ Cuando funcione, volver a `novedades.json` con `probar: false` y **activar** el 
 |---|---|
 | Cada 5 minutos | Lanza el flujo |
 | Configuración | Remitente, destinatario y modo prueba (`radar_configuracion.js`) |
-| Leer boletines | Descarga `boletines.json` de GitHub, lee cada feed, filtra, quita los ya avisados y monta el correo (`radar_leer.js`) |
+| Leer boletines | Descarga `boletines.json` de GitHub, lee cada feed, filtra, quita los ya avisados, lee el detalle de los avisos vivos y monta el correo (`radar_leer.js`) |
 | Enviar correo | Por la cuenta SMTP de n8n |
-| Marcar como avisados | Solo si el correo ha salido bien (`radar_marcar.js`) |
+| Marcar como avisados | Solo si el correo ha salido bien: guarda los avisados y el estado de los avisos vivos (`radar_marcar.js`) |
+
+**Avisos vivos.** De los boletines de componentes de terceros de Cisco, Fortinet y Palo Alto se lee el detalle (la página del aviso o su JSON) durante los días de `seguimiento.dias`. Se guarda el estado de cada producto perimetral en los datos estáticos del flujo (`huellas`). Si cambia en un aviso ya avisado, sale en el correo como «Actualizado», con la nota de la revisión y una línea por producto («FortiOS: en investigación → no afectado»). La primera lectura de un aviso ya avisado solo se guarda. Con `probar: true`, el correo de prueba incluye un aviso actualizado simulado.
 
 Para instalarlo:
 

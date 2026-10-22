@@ -41,6 +41,13 @@ listados en `boletines.json` y se queda con esos boletines:
 
 Para añadir un feed o cambiar las reglas basta con editar `boletines.json`: lo leen GitHub y n8n.
 
+**Avisos vivos.** Los boletines de componentes de terceros se publican con los productos «en investigación», y el
+fabricante los va revisando sin publicar un boletín nuevo. Durante 30 días se lee el detalle de cada uno (página
+del aviso de Cisco y de FortiGuard, JSON de Palo Alto) y se guarda el estado de cada producto perimetral
+(afectado / en investigación / no afectado). La web lo muestra en la franja ámbar, y el correo avisa cuando cambia
+algún producto perimetral («FortiOS: en investigación → no afectado»). Los productos que cuentan como perimetrales
+están en `seguimiento.perimetrales` de `boletines.json`.
+
 ```bash
 python boletines.py --dias 30                                          # qué detecta ahora
 python avisos.py --vista-previa correo.html --boletines                # correo de prueba, sin enviar

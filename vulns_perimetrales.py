@@ -996,6 +996,10 @@ footer{font-family:var(--f-mono);font-size:11px;letter-spacing:.3px}
 .btit{display:block;margin-top:8px;font:600 15px/1.4 var(--f-body);color:var(--ink);transition:color .15s}
 .btit::after{content:" \2197";font-weight:400;color:var(--faint)}
 .bol:hover .btit{color:var(--accent)}
+.best{display:flex;flex-direction:column;gap:4px;margin-top:8px;font:400 12.5px/1.45 var(--f-body);color:var(--text)}
+.best b{font:600 10px/1.2 var(--f-mono);letter-spacing:.08em;text-transform:uppercase;margin-right:8px;color:var(--muted)}
+.best [data-e="afectado"] b{color:var(--exploit)}
+.best [data-e="investigando"] b{color:var(--high)}
 .vcuenta .a,.toc .tq .a{color:var(--high)}
 
 @media (max-width:900px){ .vendor{--vpx:22px;padding:26px var(--vpx)} .vside{margin-top:-26px} }
@@ -1248,12 +1252,23 @@ function bloque(r){
     </div></details>`;
 }
 
-// aviso del fabricante: etiqueta, fecha y fuente, y el título enlazado al boletín original
+// aviso vivo (terceros): productos perimetrales por estado, como los da la última revisión del fabricante
+const ESTADO_GRUPO = {"afectado": "Afectados", "investigando": "En investigación", "no afectado": "No afectados"};
+function estadoBol(d){
+  if (!d || !d.estado) return "";
+  const g = Object.keys(ESTADO_GRUPO).map(e => [e, Object.keys(d.estado).filter(p => d.estado[p] === e)]).filter(([, p]) => p.length);
+  return g.length ? `<span class="best">${g.map(([e, p]) => `<span data-e="${e}"><b>${ESTADO_GRUPO[e]}</b>${esc(p.join(", "))}</span>`).join("")}</span>` : "";
+}
+
+// aviso del fabricante: etiqueta, fecha y fuente (y última revisión, si es posterior), y el título enlazado
 function boletin(b){
-  const nc = b.cves.length, q = [b.titulo, b.etiqueta, b.fuente, ...b.cves].join(" ").toLowerCase();
+  const nc = b.cves.length, d = b.detalle, est = d && d.estado ? Object.keys(d.estado) : [];
+  const q = [b.titulo, b.etiqueta, b.fuente, ...b.cves, ...est].join(" ").toLowerCase();
+  const rev = d && d.actualizado && d.actualizado.slice(0, 10) > b.fecha.slice(0, 10)
+    ? ` · revisado ${fecha(d.actualizado.slice(0, 10))}${d.version ? ` (v${esc(d.version)})` : ""}` : "";
   return `<a class="bol" href="${esc(b.url)}" target="_blank" rel="noopener" data-q="${esc(q)}">
-    <span class="bline"><span class="btag">${esc(b.etiqueta)}</span><span class="bmeta">${fecha(b.fecha.slice(0, 10))} · ${esc(b.fuente)}${nc ? ` · ${nc} CVE${nc>1?"s":""}` : ""}</span></span>
-    <span class="btit">${esc(b.titulo)}</span></a>`;
+    <span class="bline"><span class="btag">${esc(b.etiqueta)}</span><span class="bmeta">${fecha(b.fecha.slice(0, 10))}${rev} · ${esc(b.fuente)}${nc ? ` · ${nc} CVE${nc>1?"s":""}` : ""}</span></span>
+    <span class="btit">${esc(b.titulo)}</span>${estadoBol(d)}</a>`;
 }
 
 function render(){
@@ -2134,7 +2149,7 @@ def main():
         # boletines de los fabricantes que NVD no ve (hardening, preavisos, terceros) de los últimos 30 días
         try:
             import boletines
-            bols = boletines.obtener(30, {k: FABRICANTES[k]["nombre"] for k in seleccion})
+            bols = boletines.obtener(30, {k: FABRICANTES[k]["nombre"] for k in seleccion}, con_detalle=True)
         except Exception as e:  # noqa: BLE001 - sin radar, la web se publica igual
             print(f"Aviso: radar de boletines no disponible ({e})", file=sys.stderr)
             bols = []

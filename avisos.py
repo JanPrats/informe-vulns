@@ -84,10 +84,11 @@ def cargar_estado():
         return None
 
 
-def guardar_estado(avisadas, bols):
-    """CVEs y boletines ya avisados, en el mismo archivo (así no cambia la lista de la caché de Actions)."""
+def guardar_estado(avisadas, bols, huellas=None):
+    """CVEs y boletines ya avisados, y la última lectura de cada aviso vivo (producto → estado), en el mismo
+    archivo (así no cambia la lista de la caché de Actions)."""
     with open(RUTA_ESTADO, "w", encoding="utf-8") as f:
-        json.dump({"avisadas": avisadas, "boletines": bols}, f)
+        json.dump({"avisadas": avisadas, "boletines": bols, "huellas": huellas or {}}, f)
 
 
 # ----------------------------------------------------------------------------- correo
@@ -283,61 +284,146 @@ def lista_cves(cves, maximo=6):
     return ", ".join(cves[:maximo]) + (f" y {len(cves) - maximo} más" if len(cves) > maximo else "")
 
 
-def asunto_boletines(bols):
-    b = bols[0]
-    if len(bols) == 1:
+# Avisos vivos: estado de los productos perimetrales en los boletines nuevos y, en los ya avisados, qué ha cambiado.
+# Los cambiados llevan b["cambios"] = [(producto, antes, ahora)] (boletines.cambios).
+ESTADO_ES = {"afectado": "afectado", "investigando": "en investigación", "no afectado": "no afectado",
+             None: "sin mención"}
+ESTADO_COLOR = {"afectado": "#C8102E", "investigando": AMBAR, "no afectado": "#374151", None: "#6b7280"}
+ESTADO_GRUPO = {"afectado": "Afectados", "investigando": "En investigación", "no afectado": "No afectados"}
+
+
+def resumen_estado(d):
+    """[(estado, [productos])] de un aviso vivo, en el orden de boletines.ESTADOS, sin los grupos vacíos."""
+    if not d or not d.get("estado"):
+        return []
+    grupos = [(est, [p for p, e in d["estado"].items() if e == est]) for est in boletines.ESTADOS]
+    return [(est, prods) for est, prods in grupos if prods]
+
+
+def revision(d):
+    """«22 oct 2026 · v1.2»: fecha y versión de la última revisión de un aviso vivo."""
+    partes = [fecha_corta(d["actualizado"])] if d and d.get("actualizado") else []
+    return " · ".join(partes + ([f"v{d['version']}"] if d and d.get("version") else []))
+
+
+def asunto_boletines(bols, cambiados=()):
+    if not bols and len(cambiados) == 1:
+        b = cambiados[0]
+        p, _, ahora = b["cambios"][0]
+        mas = f" y {len(b['cambios']) - 1} más" if len(b["cambios"]) > 1 else ""
+        return (f"[Vulns perimetrales] Aviso actualizado de {b['fabricante']}: {p} {ESTADO_ES[ahora]}{mas}"
+                f" — {b['titulo']}")
+    b = (list(bols) + list(cambiados))[0]
+    if len(bols) == 1 and not cambiados:
         return f"[Vulns perimetrales] Aviso de {b['fabricante']}: {b['titulo']}"
-    return f"[Vulns perimetrales] {len(bols)} avisos de fabricante — {b['fabricante']}: {b['titulo']}"
+    return f"[Vulns perimetrales] {titulo_boletines(bols, cambiados)} — {b['fabricante']}: {b['titulo']}"
 
 
-def texto_boletines(bols, url):
+def titulo_boletines(bols, cambiados=()):
+    n, m = len(bols), len(cambiados)
+    partes = ([f"{n} aviso{'s' if n != 1 else ''} de fabricante"] if n else []) + \
+             ([f"{m} aviso{'s' if m != 1 else ''} actualizado{'s' if m != 1 else ''}"] if m else [])
+    return " y ".join(partes)
+
+
+def texto_boletines(bols, url, cambiados=()):
     lineas = ["Avisos de los fabricantes que no llegan por NVD (hardening, preavisos, componentes de terceros).", ""]
     for b in bols:
         lineas.append(f"* {b['fabricante']} · {b['etiqueta']} · {fecha_corta(b['fecha'])}")
         lineas.append(f"  {b['titulo']}")
         if b["cves"]:
             lineas.append(f"  CVEs: {lista_cves(b['cves'])}")
+        for est, prods in resumen_estado(b.get("detalle")):
+            lineas.append(f"  {ESTADO_GRUPO[est]}: {', '.join(prods)}")
+        lineas += [f"  {b['url']}", ""]
+    for b in cambiados:
+        lineas.append(f"* {b['fabricante']} · Actualizado · {revision(b['detalle'])}")
+        lineas.append(f"  {b['titulo']}")
+        if b["detalle"].get("nota"):
+            lineas.append(f"  {b['detalle']['nota']}")
+        lineas += [f"  - {p}: {ESTADO_ES[antes]} → {ESTADO_ES[ahora]}" for p, antes, ahora in b["cambios"]]
         lineas += [f"  {b['url']}", ""]
     if url:
         lineas.append(f"Informe completo: {url}")
     return "\n".join(lineas)
 
 
-def html_boletin(b, borde):
+def html_estado(b):
+    """Filas con los productos perimetrales por estado (avisos vivos nuevos)."""
+    e = html.escape
+    return "".join(
+        f'<tr><td style="{FUENTE}font-size:13px;line-height:19px;color:#374151;padding-top:6px;">'
+        f'<span style="font-weight:bold;color:{ESTADO_COLOR[est]};">{ESTADO_GRUPO[est]}:</span> {e(", ".join(prods))}</td></tr>'
+        for est, prods in resumen_estado(b.get("detalle")))
+
+
+def html_cambios(b):
+    """Nota de la revisión y una fila por producto que ha cambiado de estado."""
+    e = html.escape
+    nota = (f'<tr><td style="{FUENTE}font-size:13px;line-height:19px;color:#6b7280;font-style:italic;padding-top:6px;">'
+            f'{e(b["detalle"]["nota"])}</td></tr>') if b["detalle"].get("nota") else ""
+    return nota + "".join(
+        f'<tr><td style="{FUENTE}font-size:13px;line-height:19px;color:#374151;padding-top:6px;">'
+        f'<span style="font-weight:bold;">{e(p)}</span>: <span style="color:{ESTADO_COLOR[antes]};">{ESTADO_ES[antes]}</span>'
+        f' &rarr; <span style="font-weight:bold;color:{ESTADO_COLOR[ahora]};">{ESTADO_ES[ahora]}</span></td></tr>'
+        for p, antes, ahora in b["cambios"])
+
+
+def html_boletin(b, borde, cambiado=False):
     e = html.escape
     cves = (f'<tr><td style="{FUENTE}font-size:13px;line-height:19px;color:#374151;padding-top:6px;">CVEs: '
-            f'{e(lista_cves(b["cves"]))}</td></tr>') if b["cves"] else ""
+            f'{e(lista_cves(b["cves"]))}</td></tr>') if b["cves"] and not cambiado else ""
+    etiqueta, cuando = ("Actualizado", revision(b["detalle"])) if cambiado else (b["etiqueta"], fecha_corta(b["fecha"]))
     return f"""
         <tr><td colspan="2" style="{FUENTE}{'border-top:1px solid #e5e7eb;' if borde else ''}padding:14px 0;">
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
-            <tr><td style="{FUENTE}font-size:10px;line-height:16px;font-weight:bold;letter-spacing:1px;text-transform:uppercase;color:{AMBAR};">{e(b['etiqueta'])}<span style="font-weight:normal;color:#6b7280;">&nbsp;&nbsp;·&nbsp;&nbsp;{fecha_corta(b['fecha'])}&nbsp;&nbsp;·&nbsp;&nbsp;{e(b['fuente'])}</span></td></tr>
+            <tr><td style="{FUENTE}font-size:10px;line-height:16px;font-weight:bold;letter-spacing:1px;text-transform:uppercase;color:{AMBAR};">{e(etiqueta)}<span style="font-weight:normal;color:#6b7280;">&nbsp;&nbsp;·&nbsp;&nbsp;{e(cuando)}&nbsp;&nbsp;·&nbsp;&nbsp;{e(b['fuente'])}</span></td></tr>
             <tr><td style="{FUENTE}font-size:15px;line-height:22px;padding-top:4px;"><a href="{e(b['url'])}" style="color:#111827;font-weight:bold;text-decoration:none;"><span style="color:#111827;">{e(b['titulo'])}</span></a></td></tr>
-            {cves}
+            {cves}{html_cambios(b) if cambiado else html_estado(b)}
           </table>
         </td></tr>"""
 
 
-def html_boletines(bols, url):
+def html_boletines(bols, url, cambiados=()):
     bloques, grupos = [], {}
     for b in bols:
-        grupos.setdefault(b["fabricante"], []).append(b)
+        grupos.setdefault(b["fabricante"], []).append((b, False))
+    for b in cambiados:
+        grupos.setdefault(b["fabricante"], []).append((b, True))
     for nf, (fab, lista) in enumerate(grupos.items()):
         bloques.append(html_fabricante(fab, nf == 0))
-        bloques += [html_boletin(b, i > 0) for i, b in enumerate(lista)]
-    n = len(bols)
-    titulo = f"{n} aviso{'s' if n != 1 else ''} de fabricante"
-    return html_pagina(titulo, "".join(bloques), url, "Fuentes: feeds oficiales de los fabricantes")
+        bloques += [html_boletin(b, i > 0, cambiado) for i, (b, cambiado) in enumerate(lista)]
+    return html_pagina(titulo_boletines(bols, cambiados), "".join(bloques), url,
+                       "Fuentes: feeds oficiales de los fabricantes")
 
 
-def enviar_boletines(bols, url):
-    _enviar(asunto_boletines(bols), texto_boletines(bols, url), html_boletines(bols, url))
-    print(f"Correo enviado con {len(bols)} boletín(es).", file=sys.stderr)
+def enviar_boletines(bols, url, cambiados=()):
+    _enviar(asunto_boletines(bols, cambiados), texto_boletines(bols, url, cambiados),
+            html_boletines(bols, url, cambiados))
+    print(f"Correo enviado con {len(bols)} boletín(es) nuevos y {len(cambiados)} actualizado(s).", file=sys.stderr)
 
 
-def boletines_recientes(seleccion, dias):
+def seguir_vivos(bols, nuevos, huellas):
+    """Compara la lectura actual de cada aviso vivo con la anterior. Devuelve los ya avisados en los que ha
+    cambiado el estado de algún producto perimetral (con b["cambios"]) y deja `huellas` al día. La primera
+    lectura de un aviso ya avisado solo se guarda. Un aviso que no se ha podido leer conserva su huella."""
+    cambiados, ids_nuevos = [], {b["id"] for b in nuevos}
+    for b in bols:
+        d = b.get("detalle")
+        if not d or not d["estado"]:
+            continue
+        if b["id"] in huellas and b["id"] not in ids_nuevos:
+            cs = boletines.cambios(huellas[b["id"]], d["estado"])
+            if cs:
+                cambiados.append({**b, "cambios": cs})
+        huellas[b["id"]] = d["estado"]
+    return cambiados
+
+
+def boletines_recientes(seleccion, dias, con_detalle=False):
     nombres = {k: vp.FABRICANTES[k]["nombre"] for k in seleccion}
     try:
-        return boletines.obtener(dias, nombres)
+        return boletines.obtener(dias, nombres, con_detalle=con_detalle)
     except Exception as e:  # noqa: BLE001 - el radar nunca debe impedir los avisos de CVEs
         print(f"Aviso: radar de boletines no disponible ({e})", file=sys.stderr)
         return None
@@ -389,7 +475,8 @@ def main():
     p.add_argument("--cves", metavar="LISTA", help="para la prueba: CVEs concretas del histórico publicado, separadas por comas")
     p.add_argument("--novedades", metavar="JSON", help="para la prueba: guarda las CVEs de la prueba en este novedades.json")
     p.add_argument("--boletines", action="store_true",
-                   help="con --probar o --vista-previa: la prueba es con los 3 boletines de fabricante más recientes")
+                   help="con --probar o --vista-previa: la prueba es con los 3 boletines de fabricante más recientes "
+                        "y un aviso vivo actualizado (simulado)")
     a = p.parse_args()
 
     hasta = datetime.now(timezone.utc)
@@ -410,15 +497,22 @@ def main():
         sys.exit(f"AVISO_FABRICANTES no coincide con ningún fabricante: {filtro}")
 
     if a.boletines and (a.probar or a.vista_previa):
-        prueba = (boletines_recientes(seleccion, 60) or [])[:3]
+        todos = boletines_recientes(seleccion, 60, True) or []
+        prueba = todos[:3]
         if not prueba:
             sys.exit("No hay boletines con los que hacer la prueba.")
+        # y un aviso vivo «actualizado», como si antes todos sus productos hubieran estado en investigación
+        simulados = [{**b, "cambios": boletines.cambios({p: "investigando" for p in b["detalle"]["estado"]},
+                                                        b["detalle"]["estado"])}
+                     for b in todos if (b.get("detalle") or {}).get("estado")]
+        cambiados = [b for b in simulados if b["cambios"]][:1]
         if a.vista_previa:
             with open(a.vista_previa, "w", encoding="utf-8") as f:
-                f.write(html_boletines(prueba, url))
-            print(f"Asunto: {asunto_boletines(prueba)}\nVista previa guardada en {a.vista_previa}", file=sys.stderr)
+                f.write(html_boletines(prueba, url, cambiados))
+            print(f"Asunto: {asunto_boletines(prueba, cambiados)}\nVista previa guardada en {a.vista_previa}",
+                  file=sys.stderr)
         else:
-            enviar_boletines(prueba, url)
+            enviar_boletines(prueba, url, cambiados)
         return
 
     kev = vp.descargar_kev()
@@ -443,11 +537,16 @@ def main():
     estado = cargar_estado()
     ahora = hasta.strftime("%Y-%m-%dT%H:%M:%SZ")
     avisadas = (estado or {}).get("avisadas", {})
-    bols = boletines_recientes(seleccion, boletines.cargar_config()["dias_aviso"])
+    # se leen los del periodo de seguimiento (avisos vivos), pero solo son nuevos los de los últimos dias_aviso
+    conf_bols = boletines.cargar_config()
+    bols = boletines_recientes(seleccion, max(conf_bols["dias_aviso"], conf_bols["seguimiento"]["dias"]), True)
+    corte = (hasta - timedelta(days=conf_bols["dias_aviso"])).strftime("%Y-%m-%dT%H:%M:%SZ")
+    huellas = (estado or {}).get("huellas", {})
 
     if estado is None:
         # Primera ejecución: se marca todo lo actual como ya avisado, sin enviar nada
-        guardar_estado({r["cve"]: ahora for r in actuales}, {b["id"]: ahora for b in bols or []})
+        seguir_vivos(bols or [], [], huellas)
+        guardar_estado({r["cve"]: ahora for r in actuales}, {b["id"]: ahora for b in bols or []}, huellas)
         print(f"Primera ejecución: {len(actuales)} CVEs actuales marcadas como avisadas. No se envía correo.",
               file=sys.stderr)
         return
@@ -458,19 +557,21 @@ def main():
         bols_avisados = bols_avisados or {}
     elif bols_avisados is None:
         bols_avisados = {b["id"]: ahora for b in bols}
+        seguir_vivos(bols, [], huellas)
         print(f"Radar de boletines activado: {len(bols)} boletines actuales marcados como avisados.", file=sys.stderr)
     else:
-        nuevos = [b for b in bols if b["id"] not in bols_avisados]
-        if nuevos:
-            enviar_boletines(nuevos, url)
+        nuevos = [b for b in bols if b["id"] not in bols_avisados and b["fecha"] >= corte]
+        cambiados = seguir_vivos(bols, nuevos, huellas)
+        if nuevos or cambiados:
+            enviar_boletines(nuevos, url, cambiados)
             for b in nuevos:
                 bols_avisados[b["id"]] = ahora
-            # la web solo se publica una vez al día: el workflow la regenera si hay boletines nuevos
+            # la web solo se publica una vez al día: el workflow la regenera si hay boletines nuevos o cambios
             if os.environ.get("GITHUB_OUTPUT"):
                 with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
                     f.write("web=1\n")
         else:
-            print("Sin boletines nuevos.", file=sys.stderr)
+            print("Sin boletines nuevos ni cambios en los avisos vivos.", file=sys.stderr)
 
     nuevas = [r for r in actuales if r["cve"] not in avisadas]
     if nuevas:
@@ -483,8 +584,9 @@ def main():
 
     # se olvidan las avisadas hace más de RECUERDA_DIAS (ya no pueden volver a aparecer en la ventana)
     limite = (hasta - timedelta(days=RECUERDA_DIAS)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    guardar_estado({k: v for k, v in avisadas.items() if v >= limite},
-                   {k: v for k, v in bols_avisados.items() if v >= limite})
+    bols_avisados = {k: v for k, v in bols_avisados.items() if v >= limite}
+    guardar_estado({k: v for k, v in avisadas.items() if v >= limite}, bols_avisados,
+                   {k: v for k, v in huellas.items() if k in bols_avisados})
 
 
 def terminar_prueba(a, prueba, url):
