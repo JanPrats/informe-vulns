@@ -159,7 +159,8 @@ def _cisco(lineas, perimetrales):
         elif actual and _es_producto(l, perimetrales):
             _poner(estado, l, actual)
     texto = " ".join(lineas)
-    m = re.search(r"(?:Last Updated|First Published):\s*(\d{4}) ([A-Za-z]+) (\d{1,2}) (\d{1,2}:\d\d)", texto)
+    fecha = r":\s*(\d{4}) ([A-Za-z]+) (\d{1,2}) (\d{1,2}:\d\d)"             # las dos pueden salir en cualquier orden
+    m = re.search("Last Updated" + fecha, texto) or re.search("First Published" + fecha, texto)
     v = re.search(r"\bVersion (\d+(?:\.\d+)+)", texto)
     nota = ""
     if "Revision History" in lineas:

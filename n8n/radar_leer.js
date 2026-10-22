@@ -80,7 +80,8 @@ function cisco(ls, perim) {
     else if (actual && esProducto(l, perim)) poner(estado, l, actual);
   }
   const t = ls.join(' ');
-  const m = t.match(/(?:Last Updated|First Published):\s*(\d{4}) ([A-Za-z]+) (\d{1,2}) (\d{1,2}:\d\d)/);
+  const fecha = ':\\s*(\\d{4}) ([A-Za-z]+) (\\d{1,2}) (\\d{1,2}:\\d\\d)';     // las dos pueden salir en cualquier orden
+  const m = t.match(new RegExp('Last Updated' + fecha)) || t.match(new RegExp('First Published' + fecha));
   const v = t.match(/\bVersion (\d+(?:\.\d+)+)/);
   let nota = '';
   const r = ls.indexOf('Revision History');
