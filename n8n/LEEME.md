@@ -13,17 +13,17 @@ GitHub sigue enviando su correo de respaldo, **sin clientes**, por si n8n falla.
 
 ## Flujo
 
-| Nodo | Qué hace |
-|---|---|
-| Cada 10 minutos | Lanza el flujo |
-| Configuración | Valores editables: Excel, correo, modo prueba (`configuracion.js`) |
-| Descargar novedades | Descarga `novedades.json` de GitHub |
-| CVEs sin avisar | Se queda con las que aún no se han avisado (`sin_avisar.js`) |
-| Buscar sitio SharePoint / Descargar Excel | Descarga el Excel con Microsoft Graph |
-| Leer Excel | Convierte la primera hoja en filas |
-| Cruzar con clientes | Compara versiones, decide el estado de cada equipo y monta el correo (`cruce.js`) |
-| Enviar correo | Por la cuenta SMTP de n8n |
-| Marcar como avisadas | Solo si el correo ha salido bien (`marcar.js`) |
+| Nodo                                      | Qué hace                                                                          |
+| ----------------------------------------- | --------------------------------------------------------------------------------- |
+| Cada 10 minutos                           | Lanza el flujo                                                                    |
+| Configuración                             | Valores editables: Excel, correo, modo prueba (`configuracion.js`)                |
+| Descargar novedades                       | Descarga `novedades.json` de GitHub                                               |
+| CVEs sin avisar                           | Se queda con las que aún no se han avisado (`sin_avisar.js`)                      |
+| Buscar sitio SharePoint / Descargar Excel | Descarga el Excel con Microsoft Graph                                             |
+| Leer Excel                                | Convierte la primera hoja en filas                                                |
+| Cruzar con clientes                       | Compara versiones, decide el estado de cada equipo y monta el correo (`cruce.js`) |
+| Enviar correo                             | Por la cuenta SMTP de n8n                                                         |
+| Marcar como avisadas                      | Solo si el correo ha salido bien (`marcar.js`)                                    |
 
 La primera ejecución activa no envía nada: solo marca como avisadas las CVEs que ya hay.
 
@@ -94,6 +94,30 @@ Cuando funcione, volver a `novedades.json` con `probar: false` y **activar** el 
 - **Vulnerable por versión · revisar si es explotable**: versión afectada, pero solo es explotable con cierta
   configuración (se indica cuál).
 - **Revisar versión**: el producto coincide, pero no se puede determinar si la versión está afectada.
+
+## Radar de boletines (segundo flujo)
+
+`radar_boletines.json` es un flujo aparte y no necesita SharePoint. Avisa de lo que NVD no ve: *security hardening releases*, preavisos y boletines sobre componentes de terceros, como PHP u OpenSSL. Lee él mismo los feeds de los fabricantes cada 5 minutos, así que no depende de GitHub Actions, que se retrasa horas.
+
+| Nodo | Qué hace |
+|---|---|
+| Cada 5 minutos | Lanza el flujo |
+| Configuración | Remitente, destinatario y modo prueba (`radar_configuracion.js`) |
+| Leer boletines | Descarga `boletines.json` de GitHub, lee cada feed, filtra, quita los ya avisados y monta el correo (`radar_leer.js`) |
+| Enviar correo | Por la cuenta SMTP de n8n |
+| Marcar como avisados | Solo si el correo ha salido bien (`radar_marcar.js`) |
+
+Para instalarlo:
+
+1. **Workflows → Import from file** → `radar_boletines.json`.
+2. En **Enviar correo**, elegir la cuenta SMTP.
+3. En **Configuración**, rellenar el remitente y el destinatario.
+4. Probar con `probar: true` y ejecutarlo a mano: llega un correo con los 3 boletines más recientes.
+5. Volver a `probar: false` y **activar** el flujo. La primera ejecución activa no envía nada: solo marca los boletines que ya hay.
+
+Los feeds y las reglas están en `boletines.json`, en la rama `main` del repositorio. n8n los lee en cada ejecución, así que para añadir un fabricante no hace falta tocar n8n. La lógica de `radar_leer.js` tiene que coincidir con la de `boletines.py`: si cambia una, hay que cambiar la otra.
+
+El nodo usa `this.helpers.httpRequest` del nodo Code. Si la versión de n8n no lo permite, el nodo fallará al leer `boletines.json`.
 
 ## Cambiar el código
 

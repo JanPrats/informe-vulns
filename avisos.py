@@ -40,6 +40,7 @@ from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 
 import afectacion
+import boletines
 import vulns_perimetrales as vp
 
 CARPETA = os.path.dirname(os.path.abspath(__file__))
@@ -83,9 +84,10 @@ def cargar_estado():
         return None
 
 
-def guardar_estado(avisadas):
+def guardar_estado(avisadas, bols):
+    """CVEs y boletines ya avisados, en el mismo archivo (así no cambia la lista de la caché de Actions)."""
     with open(RUTA_ESTADO, "w", encoding="utf-8") as f:
-        json.dump({"avisadas": avisadas}, f)
+        json.dump({"avisadas": avisadas, "boletines": bols}, f)
 
 
 # ----------------------------------------------------------------------------- correo
@@ -197,7 +199,7 @@ def html_cve(r):
         </tr>"""
 
 
-def html_pagina(titulo, bloques, url):
+def html_pagina(titulo, bloques, url, pie="Fuentes: NVD, CVE.org y CISA KEV"):
     boton = f"""
         <tr><td colspan="2" style="padding-top:28px;">
           <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
@@ -221,7 +223,7 @@ def html_pagina(titulo, bloques, url):
       </td></tr>
     </table>
     <table role="presentation" width="640" cellpadding="0" cellspacing="0" border="0" style="width:640px;max-width:640px;">
-      <tr><td align="center" style="padding-top:12px;{FUENTE}font-size:12px;color:#9ca3af;">Fuentes: NVD, CVE.org y CISA KEV</td></tr>
+      <tr><td align="center" style="padding-top:12px;{FUENTE}font-size:12px;color:#9ca3af;">{pie}</td></tr>
     </table>
   </td></tr>
 </table>
@@ -242,23 +244,103 @@ def cuerpo_html(nuevas, url):
 
 
 def enviar(nuevas, url):
+    _enviar(asunto(nuevas), cuerpo_texto(nuevas, url), cuerpo_html(nuevas, url))
+    print(f"Correo enviado con {len(nuevas)} CVE(s).", file=sys.stderr)
+
+
+def _enviar(titulo, texto, html_):
     usuario = os.environ.get("SMTP_USER")
     clave = os.environ.get("SMTP_PASSWORD")
     if not usuario or not clave:
         sys.exit("Faltan SMTP_USER y/o SMTP_PASSWORD: no se puede enviar el correo.")
     para = os.environ.get("AVISO_PARA") or usuario
     msg = EmailMessage()
-    msg["Subject"] = asunto(nuevas)
+    msg["Subject"] = titulo
     msg["From"] = f"Vulns perimetrales <{usuario}>"
     msg["To"] = para
-    msg.set_content(cuerpo_texto(nuevas, url))
-    msg.add_alternative(cuerpo_html(nuevas, url), subtype="html")
+    msg.set_content(texto)
+    msg.add_alternative(html_, subtype="html")
     host = os.environ.get("SMTP_HOST", "smtp.gmail.com")
     puerto = int(os.environ.get("SMTP_PORT", "465"))
     with smtplib.SMTP_SSL(host, puerto, context=ssl.create_default_context(), timeout=60) as s:
         s.login(usuario, clave)
         s.send_message(msg)
-    print(f"Correo enviado con {len(nuevas)} CVE(s).", file=sys.stderr)
+
+
+# ----------------------------------------------------------------------------- boletines de los fabricantes
+# Lo que NVD no ve (hardening sin CVE, preavisos, componentes de terceros). Van en un correo aparte, más corto.
+# El radar de n8n (n8n/radar_leer.js) envía el mismo correo antes; este es el respaldo.
+
+AMBAR = "#C55A11"
+MESES = ("ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic")
+
+
+def fecha_corta(iso):
+    return f"{int(iso[8:10])} {MESES[int(iso[5:7]) - 1]} {iso[:4]}"
+
+
+def lista_cves(cves, maximo=6):
+    return ", ".join(cves[:maximo]) + (f" y {len(cves) - maximo} más" if len(cves) > maximo else "")
+
+
+def asunto_boletines(bols):
+    b = bols[0]
+    if len(bols) == 1:
+        return f"[Vulns perimetrales] Aviso de {b['fabricante']}: {b['titulo']}"
+    return f"[Vulns perimetrales] {len(bols)} avisos de fabricante — {b['fabricante']}: {b['titulo']}"
+
+
+def texto_boletines(bols, url):
+    lineas = ["Avisos de los fabricantes que no llegan por NVD (hardening, preavisos, componentes de terceros).", ""]
+    for b in bols:
+        lineas.append(f"* {b['fabricante']} · {b['etiqueta']} · {fecha_corta(b['fecha'])}")
+        lineas.append(f"  {b['titulo']}")
+        if b["cves"]:
+            lineas.append(f"  CVEs: {lista_cves(b['cves'])}")
+        lineas += [f"  {b['url']}", ""]
+    if url:
+        lineas.append(f"Informe completo: {url}")
+    return "\n".join(lineas)
+
+
+def html_boletin(b, borde):
+    e = html.escape
+    cves = (f'<tr><td style="{FUENTE}font-size:13px;line-height:19px;color:#374151;padding-top:6px;">CVEs: '
+            f'{e(lista_cves(b["cves"]))}</td></tr>') if b["cves"] else ""
+    return f"""
+        <tr><td colspan="2" style="{FUENTE}{'border-top:1px solid #e5e7eb;' if borde else ''}padding:14px 0;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+            <tr><td style="{FUENTE}font-size:10px;line-height:16px;font-weight:bold;letter-spacing:1px;text-transform:uppercase;color:{AMBAR};">{e(b['etiqueta'])}<span style="font-weight:normal;color:#6b7280;">&nbsp;&nbsp;·&nbsp;&nbsp;{fecha_corta(b['fecha'])}&nbsp;&nbsp;·&nbsp;&nbsp;{e(b['fuente'])}</span></td></tr>
+            <tr><td style="{FUENTE}font-size:15px;line-height:22px;padding-top:4px;"><a href="{e(b['url'])}" style="color:#111827;font-weight:bold;text-decoration:none;"><span style="color:#111827;">{e(b['titulo'])}</span></a></td></tr>
+            {cves}
+          </table>
+        </td></tr>"""
+
+
+def html_boletines(bols, url):
+    bloques, grupos = [], {}
+    for b in bols:
+        grupos.setdefault(b["fabricante"], []).append(b)
+    for nf, (fab, lista) in enumerate(grupos.items()):
+        bloques.append(html_fabricante(fab, nf == 0))
+        bloques += [html_boletin(b, i > 0) for i, b in enumerate(lista)]
+    n = len(bols)
+    titulo = f"{n} aviso{'s' if n != 1 else ''} de fabricante"
+    return html_pagina(titulo, "".join(bloques), url, "Fuentes: feeds oficiales de los fabricantes")
+
+
+def enviar_boletines(bols, url):
+    _enviar(asunto_boletines(bols), texto_boletines(bols, url), html_boletines(bols, url))
+    print(f"Correo enviado con {len(bols)} boletín(es).", file=sys.stderr)
+
+
+def boletines_recientes(seleccion, dias):
+    nombres = {k: vp.FABRICANTES[k]["nombre"] for k in seleccion}
+    try:
+        return boletines.obtener(dias, nombres)
+    except Exception as e:  # noqa: BLE001 - el radar nunca debe impedir los avisos de CVEs
+        print(f"Aviso: radar de boletines no disponible ({e})", file=sys.stderr)
+        return None
 
 
 # ----------------------------------------------------------------------------- novedades para n8n
@@ -306,6 +388,8 @@ def main():
     p.add_argument("--vista-previa", metavar="HTML", help="no envía nada: guarda el correo de prueba en este archivo HTML")
     p.add_argument("--cves", metavar="LISTA", help="para la prueba: CVEs concretas del histórico publicado, separadas por comas")
     p.add_argument("--novedades", metavar="JSON", help="para la prueba: guarda las CVEs de la prueba en este novedades.json")
+    p.add_argument("--boletines", action="store_true",
+                   help="con --probar o --vista-previa: la prueba es con los 3 boletines de fabricante más recientes")
     a = p.parse_args()
 
     hasta = datetime.now(timezone.utc)
@@ -320,12 +404,25 @@ def main():
         terminar_prueba(a, prueba, url)
         return
 
-    kev = vp.descargar_kev()
-    cves = vp.obtener_cves(desde, hasta, api_key, RUTA_CACHE_NVD, max_dias=VENTANA_DIAS)
     filtro = [x.strip().lower() for x in os.environ.get("AVISO_FABRICANTES", "").split(",") if x.strip()]
     seleccion = [k for k, f in vp.FABRICANTES.items() if not filtro or k in filtro or f["nombre"].lower() in filtro]
     if filtro and not seleccion:
         sys.exit(f"AVISO_FABRICANTES no coincide con ningún fabricante: {filtro}")
+
+    if a.boletines and (a.probar or a.vista_previa):
+        prueba = (boletines_recientes(seleccion, 60) or [])[:3]
+        if not prueba:
+            sys.exit("No hay boletines con los que hacer la prueba.")
+        if a.vista_previa:
+            with open(a.vista_previa, "w", encoding="utf-8") as f:
+                f.write(html_boletines(prueba, url))
+            print(f"Asunto: {asunto_boletines(prueba)}\nVista previa guardada en {a.vista_previa}", file=sys.stderr)
+        else:
+            enviar_boletines(prueba, url)
+        return
+
+    kev = vp.descargar_kev()
+    cves = vp.obtener_cves(desde, hasta, api_key, RUTA_CACHE_NVD, max_dias=VENTANA_DIAS)
     actuales = vp.filtrar(cves, seleccion, kev, 0)
     por_id = {c["id"]: c for c in cves}
 
@@ -346,13 +443,34 @@ def main():
     estado = cargar_estado()
     ahora = hasta.strftime("%Y-%m-%dT%H:%M:%SZ")
     avisadas = (estado or {}).get("avisadas", {})
+    bols = boletines_recientes(seleccion, boletines.cargar_config()["dias_aviso"])
 
     if estado is None:
         # Primera ejecución: se marca todo lo actual como ya avisado, sin enviar nada
-        guardar_estado({r["cve"]: ahora for r in actuales})
+        guardar_estado({r["cve"]: ahora for r in actuales}, {b["id"]: ahora for b in bols or []})
         print(f"Primera ejecución: {len(actuales)} CVEs actuales marcadas como avisadas. No se envía correo.",
               file=sys.stderr)
         return
+
+    # Boletines de fabricante. La primera vez que hay radar solo se marcan los actuales, sin enviar nada.
+    bols_avisados = estado.get("boletines")
+    if bols is None:
+        bols_avisados = bols_avisados or {}
+    elif bols_avisados is None:
+        bols_avisados = {b["id"]: ahora for b in bols}
+        print(f"Radar de boletines activado: {len(bols)} boletines actuales marcados como avisados.", file=sys.stderr)
+    else:
+        nuevos = [b for b in bols if b["id"] not in bols_avisados]
+        if nuevos:
+            enviar_boletines(nuevos, url)
+            for b in nuevos:
+                bols_avisados[b["id"]] = ahora
+            # la web solo se publica una vez al día: el workflow la regenera si hay boletines nuevos
+            if os.environ.get("GITHUB_OUTPUT"):
+                with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
+                    f.write("web=1\n")
+        else:
+            print("Sin boletines nuevos.", file=sys.stderr)
 
     nuevas = [r for r in actuales if r["cve"] not in avisadas]
     if nuevas:
@@ -365,7 +483,8 @@ def main():
 
     # se olvidan las avisadas hace más de RECUERDA_DIAS (ya no pueden volver a aparecer en la ventana)
     limite = (hasta - timedelta(days=RECUERDA_DIAS)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    guardar_estado({k: v for k, v in avisadas.items() if v >= limite})
+    guardar_estado({k: v for k, v in avisadas.items() if v >= limite},
+                   {k: v for k, v in bols_avisados.items() if v >= limite})
 
 
 def terminar_prueba(a, prueba, url):

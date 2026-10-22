@@ -4,7 +4,7 @@ Listado de CVEs recientes en productos de seguridad perimetral (Palo Alto, Forti
 F5, Citrix, WatchGuard, Zscaler, etc.), agrupados por fabricante y producto, con
 requisitos de explotación y versiones a las que actualizar.
 
-Fuentes: NVD (NIST), CVE.org y CISA KEV.
+Fuentes: NVD (NIST), CVE.org, CISA KEV y los feeds de boletines de los fabricantes.
 
 ## Publicación
 
@@ -28,6 +28,23 @@ las CVEs del último año. La primera ejecución construye ese archivo (puede ta
 
 El cruce con el inventario de clientes lo hace n8n dentro de Logicalis: en este repositorio no hay ningún dato
 de clientes. Ver [n8n/LEEME.md](n8n/LEEME.md).
+
+## Radar de boletines de los fabricantes
+
+NVD no ve los avisos que salen sin CVE (*security hardening releases*, preavisos) ni el impacto de componentes de
+terceros (PHP, OpenSSL…), cuyas CVEs constan como del componente. `boletines.py` lee los feeds RSS oficiales
+listados en `boletines.json` y se queda con esos boletines:
+
+- **Web:** franja ámbar «Avisos del fabricante» en la tarjeta de cada fabricante (últimos 30 días).
+- **Correo de respaldo:** `avisos.py` envía un correo aparte cuando aparece uno nuevo y regenera la web.
+- **Alerta rápida:** el flujo de n8n `radar_boletines.json` lee los mismos feeds cada 5 minutos.
+
+Para añadir un feed o cambiar las reglas basta con editar `boletines.json`: lo leen GitHub y n8n.
+
+```bash
+python boletines.py --dias 30                                          # qué detecta ahora
+python avisos.py --vista-previa correo.html --boletines                # correo de prueba, sin enviar
+```
 
 ## Uso local
 

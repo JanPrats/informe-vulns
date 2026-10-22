@@ -1,0 +1,23 @@
+{
+  "_leeme": "Feeds oficiales de los fabricantes y reglas para quedarse con los boletines que NVD no ve (hardening sin CVE, preavisos, componentes de terceros). Lo leen boletines.py y el radar de n8n (desde GitHub, rama main): si cambias algo aquí, cambia en los dos. Las reglas son expresiones regulares que se aplican al título en minúsculas. «productos» (opcional, por feed) deja solo los boletines de productos perimetrales en los feeds que cubren todo el catálogo del fabricante.",
+  "feeds": [
+    {"fabricante": "fortinet", "fuente": "FortiGuard PSIRT", "url": "https://www.fortiguard.com/rss/ir.xml", "tipo": "psirt"},
+    {"fabricante": "fortinet", "fuente": "Blog PSIRT de Fortinet", "url": "https://feeds.fortinet.com/fortinet/blog/psirt", "tipo": "blog-psirt"},
+    {"fabricante": "fortinet", "fuente": "Blog CISO Collective de Fortinet", "url": "https://feeds.fortinet.com/fortinet/blog/ciso-collective", "tipo": "blog"},
+    {"fabricante": "paloalto", "fuente": "Palo Alto Networks Security Advisories", "url": "https://security.paloaltonetworks.com/rss.xml", "tipo": "psirt"},
+    {"fabricante": "paloalto", "fuente": "Blog de Palo Alto Networks", "url": "https://www.paloaltonetworks.com/blog/feed/", "tipo": "blog"},
+    {"fabricante": "cisco", "fuente": "Cisco Security Advisories", "url": "https://sec.cloudapps.cisco.com/security/center/psirtrss20/CiscoSecurityAdvisory.xml", "tipo": "psirt",
+     "productos": "adaptive security|firepower|secure firewall|threat defense|identity services|\\bise\\b|anyconnect|secure client|sd-wan|meraki|snort|advance notification|affecting cisco products"}
+  ],
+  "reglas": {
+    "terceros": "\\b(php|chromium|openssl|openssh|glibc|libssh|linux kernel|third[- ]party|open[- ]source)\\b|affecting cisco products|^cve-\\S+ impact of",
+    "sin_cve": "hardening|advance notification|security release|informational|pan-sa-\\d|pre-?announce|guidance",
+    "blog": "psirt|exploit|zero[- ]day|compromise|abuse|actively|cve-\\d"
+  },
+  "etiquetas": {
+    "terceros": "Componente de terceros",
+    "sin-cve": "Hardening o preaviso",
+    "comunicado": "Comunicado"
+  },
+  "dias_aviso": 7
+}

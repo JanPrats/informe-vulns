@@ -16,6 +16,7 @@ on:
 
 permissions:
   contents: write   # para publicar novedades.json en la rama «datos»
+  actions: write    # para regenerar la web cuando llega un boletín de fabricante
 
 concurrency:
   group: avisos
@@ -45,6 +46,7 @@ jobs:
 
       # Aquí no hay ningún dato de clientes: el cruce con el inventario lo hace n8n, dentro de Logicalis.
       - name: Comprobar CVEs nuevas y avisar
+        id: avisar
         env:
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
@@ -59,6 +61,13 @@ jobs:
           else
             python avisos.py
           fi
+
+      # La web se publica una vez al día; si hay un boletín de fabricante nuevo, se regenera ya
+      - name: Regenerar la web
+        if: steps.avisar.outputs.web == '1'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run informe.yml --ref "${GITHUB_REF_NAME}"
 
       # novedades.json (y prueba.json en las pruebas) en la rama «datos», con un único commit que se reemplaza
       # cada vez. n8n lo lee de https://raw.githubusercontent.com/<repo>/datos/novedades.json

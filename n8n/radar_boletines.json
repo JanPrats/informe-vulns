@@ -1,0 +1,132 @@
+{
+  "name": "Avisos de vulnerabilidades · radar de boletines",
+  "nodes": [
+    {
+      "id": "77f5eeda-18b9-5f39-ba60-fc6d380a03a6",
+      "name": "Cada 5 minutos",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "926bba98-ee0b-5600-bce9-ba8dd532ff5b",
+      "name": "Configuración",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// Nodo «Configuración» del radar de boletines. Cambia estos valores y guarda el flujo.\nreturn [{ json: {\n  // Feeds y reglas (los mismos que usa GitHub). Se leen en cada ejecución: para añadir un feed basta con\n  // cambiar boletines.json en el repositorio\n  reglas_url: 'https://raw.githubusercontent.com/JanPrats/informe-vulns/main/boletines.json',\n\n  // Enlace al informe web que se incluye en el correo\n  informe_url: 'https://janprats.github.io/informe-vulns/',\n\n  // Correo\n  de: 'remitente@logicalis.com',          // el de la cuenta SMTP\n  para: 'destinatario@logicalis.com',     // varios: separados por comas\n\n  // Pruebas: true = envía ya un correo con los 3 boletines más recientes, sin marcar nada como avisado\n  probar: false,\n} }];\n"
+      }
+    },
+    {
+      "id": "ad07c7be-fdcd-5002-a7db-48a5b1586ee7",
+      "name": "Leer boletines",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// Nodo «Leer boletines»: lee los feeds oficiales de boletines.json y se queda con lo que NVD no ve\n// (hardening sin CVE, preavisos, componentes de terceros). Misma lógica que boletines.py: si cambias una,\n// cambia la otra. Devuelve un único elemento con el correo ya montado, o nada si no hay boletines nuevos.\n// La primera ejecución activa solo los marca como avisados, sin enviar nada.\nconst cfg = $('Configuración').first().json;\nconst conf = await this.helpers.httpRequest({ url: cfg.reglas_url, json: true });\nconst estado = $getWorkflowStaticData('global');\n\nconst NOMBRES = { fortinet: 'Fortinet', paloalto: 'Palo Alto Networks', cisco: 'Cisco', checkpoint: 'Check Point',\n  f5: 'F5', citrix: 'Citrix', watchguard: 'WatchGuard', forcepoint: 'Forcepoint', zscaler: 'Zscaler',\n  netskope: 'Netskope', cloudflare: 'Cloudflare' };\nconst ENTIDADES = { amp: '&', lt: '<', gt: '>', quot: '\"', apos: \"'\", nbsp: ' ' };\n\n// texto de un campo del XML: sin CDATA, con las entidades resueltas y sin etiquetas HTML\nconst texto = s => (s || '')\n  .replace(/<!\\[CDATA\\[([\\s\\S]*?)\\]\\]>/g, '$1')\n  .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)))\n  .replace(/&#(\\d+);/g, (_, n) => String.fromCodePoint(Number(n)))\n  .replace(/&(amp|lt|gt|quot|apos|nbsp);/g, (_, n) => ENTIDADES[n])\n  .replace(/<[^>]+>/g, ' ').replace(/\\s+/g, ' ').trim();\n// primer hijo con ese nombre, con o sin espacio de nombres (feedburner:origLink…)\nconst campo = (item, nombre) => {\n  const m = item.match(new RegExp(`<(?:[\\\\w-]+:)?${nombre}\\\\b[^>]*>([\\\\s\\\\S]*?)</(?:[\\\\w-]+:)?${nombre}>`));\n  return m ? texto(m[1]) : '';\n};\n\nfunction leerFeed(xml) {\n  return (xml.match(/<(item|entry)\\b[\\s\\S]*?<\\/\\1>/g) || []).map(item => {\n    let url = campo(item, 'origLink') || campo(item, 'link');\n    if (!url) { const h = item.match(/<link\\b[^>]*href=\"([^\"]+)\"/); url = h ? h[1] : ''; }\n    if (url.includes('vs_f=')) url = url.split('?')[0];       // Cisco: el resto es seguimiento del RSS\n    let fecha = null;\n    for (const c of ['pubDate', 'published', 'updated', 'date']) {\n      let v = campo(item, c);\n      if (/^\\d{4}-\\d\\d-\\d\\d[ T][\\d:.]+$/.test(v)) v = v.replace(' ', 'T') + 'Z';   // Cisco: sin zona = UTC, como en Python\n      const d = new Date(v);\n      if (v && !isNaN(d)) { fecha = d.toISOString(); break; }\n    }\n    const resumen = campo(item, 'description') || campo(item, 'summary');\n    return { id: (campo(item, 'guid') || campo(item, 'id') || url).split('?')[0], titulo: campo(item, 'title'), url, fecha, resumen };\n  });\n}\n\nfunction clasificar(titulo, tipo, r) {\n  const t = titulo.toLowerCase();\n  if (new RegExp(r.terceros).test(t)) return 'terceros';\n  if (new RegExp(r.sin_cve).test(t)) return 'sin-cve';\n  if (tipo === 'blog-psirt' || (tipo === 'blog' && new RegExp(r.blog).test(t))) return 'comunicado';\n  return null;\n}\n\nconst dias = cfg.probar ? 60 : conf.dias_aviso;\nconst corte = new Date(Date.now() - dias * 864e5).toISOString();\nconst vistos = new Set(), bols = [];\nfor (const feed of conf.feeds) {\n  let entradas;\n  try {\n    const xml = await this.helpers.httpRequest({ url: feed.url, headers: { 'User-Agent': 'Mozilla/5.0 (informe-vulns; radar n8n)' }, json: false });\n    entradas = leerFeed(String(xml));\n  } catch (e) { continue; }                                    // un feed caído no para los demás\n  for (const e of entradas) {\n    const clase = clasificar(e.titulo, feed.tipo, conf.reglas);\n    if (!clase || !e.fecha || e.fecha < corte || vistos.has(e.id)) continue;\n    if (feed.productos && !new RegExp(feed.productos).test(e.titulo.toLowerCase())) continue;\n    vistos.add(e.id);\n    bols.push({ id: e.id, fabricante: NOMBRES[feed.fabricante] || feed.fabricante, fuente: feed.fuente,\n      etiqueta: conf.etiquetas[clase], titulo: e.titulo, url: e.url, fecha: e.fecha,\n      cves: [...new Set(((e.titulo + ' ' + e.resumen).match(/CVE-\\d{4}-\\d{4,}/gi) || []).map(c => c.toUpperCase()))].sort() });\n  }\n}\nbols.sort((a, b) => b.fecha.localeCompare(a.fecha));\n\nlet nuevos;\nif (cfg.probar) {\n  nuevos = bols.slice(0, 3);\n} else {\n  if (!estado.boletines) {\n    estado.boletines = {};\n    const ahora = new Date().toISOString();\n    for (const b of bols) estado.boletines[b.id] = ahora;\n    return [];\n  }\n  nuevos = bols.filter(b => !(b.id in estado.boletines));\n}\nif (!nuevos.length) return [];\n\n// Correo: el mismo que monta avisos.py (html_boletines). Compatible con Outlook de escritorio: solo tablas de\n// ancho fijo y estilos en línea; nada de margin, padding ni max-width en div o span.\nconst FUENTE = \"font-family:'Segoe UI',Helvetica,Arial,sans-serif;\";\nconst SERIF = \"font-family:Georgia,'Times New Roman',serif;\";\nconst MESES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];\nconst esc = s => String(s ?? '').replace(/[&<>\"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' }[c]));\nconst fechaCorta = iso => `${Number(iso.slice(8, 10))} ${MESES[Number(iso.slice(5, 7)) - 1]} ${iso.slice(0, 4)}`;\nconst listaCves = c => c.slice(0, 6).join(', ') + (c.length > 6 ? ` y ${c.length - 6} más` : '');\n\nconst grupos = {};\nfor (const b of nuevos) (grupos[b.fabricante] ??= []).push(b);\nlet bloques = '';\nObject.entries(grupos).forEach(([fab, lista], nf) => {\n  bloques += `\n        <tr><td colspan=\"2\" style=\"${SERIF}font-size:26px;line-height:32px;color:#111827;padding:${nf ? 32 : 8}px 0 4px 0;\">${esc(fab)}</td></tr>`;\n  lista.forEach((b, i) => {\n    const cves = b.cves.length ? `<tr><td style=\"${FUENTE}font-size:13px;line-height:19px;color:#374151;padding-top:6px;\">CVEs: ${esc(listaCves(b.cves))}</td></tr>` : '';\n    bloques += `\n        <tr><td colspan=\"2\" style=\"${FUENTE}${i ? 'border-top:1px solid #e5e7eb;' : ''}padding:14px 0;\">\n          <table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\">\n            <tr><td style=\"${FUENTE}font-size:10px;line-height:16px;font-weight:bold;letter-spacing:1px;text-transform:uppercase;color:#C55A11;\">${esc(b.etiqueta)}<span style=\"font-weight:normal;color:#6b7280;\">&nbsp;&nbsp;·&nbsp;&nbsp;${fechaCorta(b.fecha)}&nbsp;&nbsp;·&nbsp;&nbsp;${esc(b.fuente)}</span></td></tr>\n            <tr><td style=\"${FUENTE}font-size:15px;line-height:22px;padding-top:4px;\"><a href=\"${esc(b.url)}\" style=\"color:#111827;font-weight:bold;text-decoration:none;\"><span style=\"color:#111827;\">${esc(b.titulo)}</span></a></td></tr>\n            ${cves}\n          </table>\n        </td></tr>`;\n  });\n});\nconst boton = cfg.informe_url ? `\n        <tr><td colspan=\"2\" style=\"padding-top:28px;\">\n          <table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\"><tr>\n            <td bgcolor=\"#111827\" style=\"background-color:#111827;border-radius:20px;padding:11px 20px;${FUENTE}\">\n              <a href=\"${esc(cfg.informe_url)}\" style=\"color:#ffffff;font-size:14px;text-decoration:none;font-weight:bold;\"><span style=\"color:#ffffff;\">Ver el informe completo</span></a>\n            </td></tr></table>\n        </td></tr>` : '';\nconst n = nuevos.length;\nconst titulo = `${n} aviso${n !== 1 ? 's' : ''} de fabricante`;\nconst html = `<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head>\n<body style=\"margin:0;padding:0;background-color:#f3f4f6;\">\n<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" bgcolor=\"#f3f4f6\" style=\"background-color:#f3f4f6;\">\n  <tr><td align=\"center\" style=\"padding:24px 12px;\">\n    <table role=\"presentation\" width=\"640\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" bgcolor=\"#ffffff\" style=\"width:640px;max-width:640px;background-color:#ffffff;border:1px solid #e5e7eb;\">\n      <tr><td style=\"padding:28px 32px 4px 32px;${FUENTE}\">\n        <div style=\"font-size:11px;letter-spacing:2px;text-transform:uppercase;color:#6b7280;\">Seguridad perimetral</div>\n        <div style=\"${SERIF}font-size:32px;line-height:40px;color:#111827;padding-top:6px;padding-bottom:14px;border-bottom:1px solid #111827;\">${titulo}</div>\n      </td></tr>\n      <tr><td style=\"padding:8px 32px 32px 32px;\">\n        <table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\">${bloques}${boton}\n        </table>\n      </td></tr>\n    </table>\n    <table role=\"presentation\" width=\"640\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"width:640px;max-width:640px;\">\n      <tr><td align=\"center\" style=\"padding-top:12px;${FUENTE}font-size:12px;color:#9ca3af;\">Fuentes: feeds oficiales de los fabricantes</td></tr>\n    </table>\n  </td></tr>\n</table>\n</body></html>`;\n\nconst b0 = nuevos[0];\nconst asunto = n === 1\n  ? `[Vulns perimetrales] Aviso de ${b0.fabricante}: ${b0.titulo}`\n  : `[Vulns perimetrales] ${n} avisos de fabricante — ${b0.fabricante}: ${b0.titulo}`;\nreturn [{ json: { de: cfg.de, para: cfg.para, asunto, html, ids: nuevos.map(b => b.id) } }];\n"
+      }
+    },
+    {
+      "id": "ab762c60-8e25-5d14-9d82-0012192dbef6",
+      "name": "Enviar correo",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        660,
+        300
+      ],
+      "parameters": {
+        "fromEmail": "={{ $json.de }}",
+        "toEmail": "={{ $json.para }}",
+        "subject": "={{ $json.asunto }}",
+        "emailFormat": "html",
+        "html": "={{ $json.html }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "b290ccd3-effe-5aa8-82eb-c1f918d0e5b8",
+      "name": "Marcar como avisados",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// Nodo «Marcar como avisados» del radar: solo se llega aquí si el correo se ha enviado bien.\n// Si falla, no se marcan y se reintentan en la siguiente ejecución.\nconst cfg = $('Configuración').first().json;\nif (!cfg.probar) {\n  const estado = $getWorkflowStaticData('global');\n  const ahora = new Date();\n  for (const id of $('Leer boletines').first().json.ids) estado.boletines[id] = ahora.toISOString();\n  // se olvidan los avisados hace más de 30 días (los feeds solo traen lo de la última semana)\n  const limite = new Date(ahora.getTime() - 30 * 864e5).toISOString();\n  for (const [id, cuando] of Object.entries(estado.boletines)) if (cuando < limite) delete estado.boletines[id];\n}\nreturn [{ json: { enviado: true } }];\n"
+      }
+    }
+  ],
+  "connections": {
+    "Cada 5 minutos": {
+      "main": [
+        [
+          {
+            "node": "Configuración",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Configuración": {
+      "main": [
+        [
+          {
+            "node": "Leer boletines",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Leer boletines": {
+      "main": [
+        [
+          {
+            "node": "Enviar correo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar correo": {
+      "main": [
+        [
+          {
+            "node": "Marcar como avisados",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

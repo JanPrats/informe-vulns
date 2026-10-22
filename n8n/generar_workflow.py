@@ -49,19 +49,42 @@ nodos = [
     codigo("Marcar como avisadas", "marcar.js", 1980),
 ]
 
-conexiones = {}
-for a, b in zip(nodos, nodos[1:]):
-    conexiones[a["name"]] = {"main": [[{"node": b["name"], "type": "main", "index": 0}]]}
+def guardar(nombre, nodos, archivo):
+    """Flujo lineal: cada nodo pasa al siguiente."""
+    conexiones = {}
+    for a, b in zip(nodos, nodos[1:]):
+        conexiones[a["name"]] = {"main": [[{"node": b["name"], "type": "main", "index": 0}]]}
+    flujo = {
+        "name": nombre,
+        "nodes": nodos,
+        "connections": conexiones,
+        "settings": {"executionOrder": "v1"},
+        "pinData": {},
+    }
+    ruta = os.path.join(CARPETA, archivo)
+    with open(ruta, "w", encoding="utf-8") as f:
+        json.dump(flujo, f, ensure_ascii=False, indent=2)
+    print(f"Flujo guardado en {ruta}")
 
-flujo = {
-    "name": "Avisos de vulnerabilidades · clientes afectados",
-    "nodes": nodos,
-    "connections": conexiones,
-    "settings": {"executionOrder": "v1"},
-    "pinData": {},
-}
 
-ruta = os.path.join(CARPETA, "avisos_clientes.json")
-with open(ruta, "w", encoding="utf-8") as f:
-    json.dump(flujo, f, ensure_ascii=False, indent=2)
-print(f"Flujo guardado en {ruta}")
+guardar("Avisos de vulnerabilidades · clientes afectados", nodos, "avisos_clientes.json")
+
+
+def radar(nodo_):
+    """Los nodos del radar tienen nombres repetidos con el otro flujo: se les da otro id."""
+    nodo_["id"] = str(uuid.uuid5(uuid.NAMESPACE_URL, "vulns-n8n/radar/" + nodo_["name"]))
+    return nodo_
+
+
+# Radar de boletines: lee él mismo los feeds de los fabricantes (no depende de GitHub Actions, que se retrasa)
+nodos_radar = [radar(n) for n in [
+    nodo("Cada 5 minutos", "n8n-nodes-base.scheduleTrigger", 1.2, 0,
+         {"rule": {"interval": [{"field": "minutes", "minutesInterval": 5}]}}),
+    codigo("Configuración", "radar_configuracion.js", 220),
+    codigo("Leer boletines", "radar_leer.js", 440),
+    nodo("Enviar correo", "n8n-nodes-base.emailSend", 2.1, 660,
+         {"fromEmail": "={{ $json.de }}", "toEmail": "={{ $json.para }}", "subject": "={{ $json.asunto }}",
+          "emailFormat": "html", "html": "={{ $json.html }}", "options": {}}),
+    codigo("Marcar como avisados", "radar_marcar.js", 880),
+]]
+guardar("Avisos de vulnerabilidades · radar de boletines", nodos_radar, "radar_boletines.json")

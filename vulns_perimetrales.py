@@ -860,6 +860,7 @@ body{background-color:var(--paper);background-image:radial-gradient(var(--punto)
 /* barra superior */
 .top{background:var(--sheet);border-bottom:2px solid var(--accent);padding-top:14px}
 .top .wrap{padding-bottom:0}
+.ghost[hidden]{display:none}
 .mrow{justify-content:space-between;align-items:center;gap:12px}
 .brand{display:flex;align-items:center;gap:12px;min-width:0}
 .logo{display:grid;place-items:center;width:34px;height:34px;border-radius:9px;background:var(--paper);color:var(--accent);flex:none}
@@ -979,10 +980,29 @@ footer{font-family:var(--f-mono);font-size:11px;letter-spacing:.3px}
 .cve[data-kev="1"]::before{border-left:2px solid var(--exploit)}
 .cve[data-kev="1"]::after{background:var(--exploit);border-color:var(--exploit);box-shadow:0 0 0 4px color-mix(in srgb,var(--exploit) 16%,transparent)}
 
+/* ---------- avisos del fabricante (hardening, preavisos, terceros): mismo hilo que las CVEs, en ámbar ---------- */
+.bols{margin-bottom:40px}
+.bols[hidden],.bol[hidden]{display:none}
+.bols .phead h3{color:var(--high)}
+.bol{position:relative;display:block;padding:16px 12px 16px 26px;border-bottom:1px solid var(--rule);color:inherit;text-decoration:none;background:linear-gradient(to right,color-mix(in srgb,var(--high) 7%,transparent),color-mix(in srgb,var(--high) 2%,transparent) 70%,transparent);border-radius:10px 0 0 10px}
+.bol::before{content:"";position:absolute;left:6px;top:0;bottom:0;border-left:2px solid var(--high)}
+.bol:first-of-type::before{top:22px}
+.bol:last-of-type::before{bottom:auto;height:22px}
+.bol:only-of-type::before{display:none}
+.bol::after{content:"";position:absolute;left:1px;top:17px;width:11px;height:11px;border-radius:50%;background:var(--high);box-shadow:0 0 0 4px color-mix(in srgb,var(--high) 16%,transparent)}
+.bline{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px}
+.btag{font:600 10.5px/1.2 var(--f-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--high)}
+.bmeta{font:500 11px/1.2 var(--f-mono);color:var(--muted)}
+.btit{display:block;margin-top:8px;font:600 15px/1.4 var(--f-body);color:var(--ink);transition:color .15s}
+.btit::after{content:" \2197";font-weight:400;color:var(--faint)}
+.bol:hover .btit{color:var(--accent)}
+.vcuenta .a,.toc .tq .a{color:var(--high)}
+
 @media (max-width:900px){ .vendor{--vpx:22px;padding:26px var(--vpx)} .vside{margin-top:-26px} }
 @media (max-width:640px){
   .vendor{--vpx:16px;padding:22px var(--vpx)} .vside{margin-top:-22px;padding-top:22px;padding-bottom:18px}
   .cve{padding-left:20px} .cve::before{left:4px} .cve::after{left:0;width:10px;height:10px}
+  .bol{padding-left:20px} .bol::before{left:4px} .bol::after{left:0;width:10px;height:10px}
 }
 </style></head>
 <body>
@@ -994,6 +1014,8 @@ footer{font-family:var(--f-mono);font-size:11px;letter-spacing:.3px}
     </div>
     <div class="meta-r">
       <span class="status" id="status"><span class="dot"></span><span id="statustxt"></span></span>
+      <a class="ghost" id="volver" href="../index.html" title="Volver a Proyectos" aria-label="Volver a Proyectos" hidden><svg class="i" viewBox="0 0 24 24"><rect x="4" y="4" width="6.5" height="6.5" rx="1.4"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.4"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.4"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.4"/></svg></a>
+      <script>if(!/github\.io$/.test(location.hostname))document.getElementById("volver").hidden=false</script>
       <button class="ghost" id="theme" title="Cambiar a tema oscuro" aria-label="Cambiar tema"><svg class="i" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg></button>
     </div>
   </div>
@@ -1038,7 +1060,7 @@ footer{font-family:var(--f-mono);font-size:11px;letter-spacing:.3px}
 </div></div>
 
 <main class="wrap" id="main"></main>
-<footer class="wrap"><span>Fuentes: NVD (NIST) · CVE.org · CISA KEV</span></footer>
+<footer class="wrap"><span>Fuentes: NVD (NIST) · CVE.org · CISA KEV · boletines de los fabricantes</span></footer>
 <script>
 // Datos generados por vulns_perimetrales.py: todas las CVEs del periodo cubierto (por defecto 30 días)
 const CONFIG = __CONFIG__;
@@ -1062,6 +1084,8 @@ const haceDias = n => isoDia(Date.now() - n * 864e5);
 
 // Archivo: lo que trae el HTML combinado con lo que este navegador haya descargado después
 let estado = {desde: CONFIG.cubre_desde, hasta: CONFIG.generado, completa: CONFIG.generado, data: __DATA__};
+// Boletines de los fabricantes que no llegan por NVD (últimos 30 días); solo en la vista «Recientes»
+const BOLETINES = __BOLETINES__;
 const guardado = store.get(CLAVE);
 if (guardado && Array.isArray(guardado.data)) {
   const [viejo, nuevo] = guardado.hasta > estado.hasta ? [estado, guardado] : [guardado, estado];
@@ -1224,32 +1248,47 @@ function bloque(r){
     </div></details>`;
 }
 
+// aviso del fabricante: etiqueta, fecha y fuente, y el título enlazado al boletín original
+function boletin(b){
+  const nc = b.cves.length, q = [b.titulo, b.etiqueta, b.fuente, ...b.cves].join(" ").toLowerCase();
+  return `<a class="bol" href="${esc(b.url)}" target="_blank" rel="noopener" data-q="${esc(q)}">
+    <span class="bline"><span class="btag">${esc(b.etiqueta)}</span><span class="bmeta">${fecha(b.fecha.slice(0, 10))} · ${esc(b.fuente)}${nc ? ` · ${nc} CVE${nc>1?"s":""}` : ""}</span></span>
+    <span class="btit">${esc(b.titulo)}</span></a>`;
+}
+
 function render(){
   const abiertos = new Set([...document.querySelectorAll(".cve[open]")].map(d => d.dataset.id));
-  const grupos = {};
+  const grupos = {}, bols = {};
   datosVista().forEach(r => ((grupos[r.fabricante] ??= {})[r.producto] ??= []).push(r));
+  if (vista === "recientes")
+    BOLETINES.filter(b => !misFab.size || misFab.has(b.fabricante)).forEach(b => { grupos[b.fabricante] ??= {}; (bols[b.fabricante] ??= []).push(b); });
   const fabs = Object.keys(grupos).map(f => {
     const todos = Object.values(grupos[f]).flat();
     return {f, todos, max: Math.max(...todos.map(prio))};
   }).sort((a,b) => b.max - a.max || b.todos.length - a.todos.length);
   const cuenta = (lista, k) => lista.filter(r => sk(r.severidad) === k).length;
   const num = i => String(i + 1).padStart(2, "0");
+  // «3 CVEs · 1 expl. · 2 avisos»: los avisos del fabricante en ámbar
+  const recuento = (f, todos) => {
+    const kevn = todos.filter(r => r.explotada_kev).length, nb = (bols[f] || []).length;
+    return [todos.length ? `${todos.length} CVE${todos.length>1?"s":""}` : "",
+            kevn ? `<span class="x">${kevn} expl.</span>` : "",
+            nb ? `<span class="a">${nb} aviso${nb>1?"s":""}</span>` : ""].filter(Boolean).join(" · ");
+  };
 
   $("statustxt").textContent = `Actualizado ${fechaHora(estado.hasta)}`;
 
-  $("index").innerHTML = fabs.map(({f, todos}, i) => {
-    const kevn = todos.filter(r => r.explotada_kev).length;
-    return `<a href="#${slug(f)}"><span class="tc">${num(i)}</span><span class="tn">${esc(f)}</span>
-      <span class="tq">${todos.length} CVE${todos.length>1?"s":""}${kevn ? ` · <span class="x">${kevn} expl.</span>` : ""}</span></a>`;
-  }).join("");
+  $("index").innerHTML = fabs.map(({f, todos}, i) =>
+    `<a href="#${slug(f)}"><span class="tc">${num(i)}</span><span class="tn">${esc(f)}</span>
+      <span class="tq">${recuento(f, todos)}</span></a>`).join("");
 
   $("main").innerHTML = fabs.length ? fabs.map(({f, todos}, i) => {
     const prods = Object.entries(grupos[f]).sort((a,b) => Math.max(...b[1].map(prio)) - Math.max(...a[1].map(prio)));
-    const kevn = todos.filter(r => r.explotada_kev).length, pleg = plegados.has(f);
+    const pleg = plegados.has(f), bl = bols[f] || [];
     return `<section class="vendor${pleg ? " plegado" : ""}" id="${slug(f)}" data-fab="${esc(f)}">
       <header class="vside" role="button" tabindex="0" aria-expanded="${!pleg}" title="Plegar o desplegar ${esc(f)}"><span class="vno">${num(i)} / ${String(fabs.length).padStart(2, "0")}</span><h2>${esc(f)}</h2>
-        <span class="vcuenta">${todos.length} CVE${todos.length>1?"s":""}${kevn ? ` · <span class="x">${kevn} expl.</span>` : ""}</span><span class="chev" aria-hidden="true"></span></header>
-      <div>${prods.map(([p, rows]) => `<div class="product"><div class="phead"><h3>${esc(p)}</h3><span>${rows.length} CVE${rows.length>1?"s":""}</span></div>
+        <span class="vcuenta">${recuento(f, todos)}</span><span class="chev" aria-hidden="true"></span></header>
+      <div>${bl.length ? `<div class="bols"><div class="phead"><h3>Avisos del fabricante</h3><span>${bl.length} · 30 días</span></div>${bl.map(boletin).join("")}</div>` : ""}${prods.map(([p, rows]) => `<div class="product"><div class="phead"><h3>${esc(p)}</h3><span>${rows.length} CVE${rows.length>1?"s":""}</span></div>
         ${rows.sort((a,b)=>prio(b)-prio(a)).map(bloque).join("")}</div>`).join("")}</div>
     </section>`;
   }).join("") : `<p class="empty">${misFab.size ? "No hay vulnerabilidades de tus fabricantes en este periodo." : "No hay vulnerabilidades en este periodo."}</p>`;
@@ -1261,8 +1300,10 @@ function render(){
 function filtrar(){
   const q = $("q").value.toLowerCase().trim();
   document.querySelectorAll(".cve").forEach(d => d.hidden = !!q && !d.dataset.q.includes(q));
+  document.querySelectorAll(".bol").forEach(d => d.hidden = !!q && !d.dataset.q.includes(q));
   document.querySelectorAll(".product").forEach(p => p.hidden = !p.querySelector(".cve:not([hidden])"));
-  document.querySelectorAll(".vendor").forEach(v => v.hidden = !v.querySelector(".cve:not([hidden])"));
+  document.querySelectorAll(".bols").forEach(b => b.hidden = !b.querySelector(".bol:not([hidden])"));
+  document.querySelectorAll(".vendor").forEach(v => v.hidden = !v.querySelector(".cve:not([hidden]),.bol:not([hidden])"));
 }
 $("q").oninput = filtrar;
 
@@ -1894,7 +1935,7 @@ abrirDesdeEnlace();
 """
 
 
-def guardar_html(res, ruta, dias, seleccion, min_cvss=0, solo_kev=False, historico=None, archivo=None):
+def guardar_html(res, ruta, dias, seleccion, min_cvss=0, solo_kev=False, historico=None, archivo=None, bols=None):
     def js(obj):  # JSON seguro para incrustar en <script>
         return json.dumps(obj, ensure_ascii=False).replace("</", "<\\/")
 
@@ -1912,7 +1953,8 @@ def guardar_html(res, ruta, dias, seleccion, min_cvss=0, solo_kev=False, histori
     if archivo:
         config["archivo"] = os.path.basename(archivo["ruta"])
         config["archivo_desde"] = archivo["desde"]
-    doc = PLANTILLA_HTML.replace("__DATA__", js(res)).replace("__CONFIG__", js(config))
+    doc = (PLANTILLA_HTML.replace("__DATA__", js(res)).replace("__CONFIG__", js(config))
+           .replace("__BOLETINES__", js(bols or [])))
     with open(ruta, "w", encoding="utf-8") as f:
         f.write(doc)
     print(f"HTML guardado en {ruta}", file=sys.stderr)
@@ -2089,7 +2131,14 @@ def main():
     if a.csv:
         guardar_csv(res, a.csv)
     if a.html:
-        guardar_html(todos, a.html, a.dias, seleccion, a.min_cvss, a.solo_kev, dias_html, archivo)
+        # boletines de los fabricantes que NVD no ve (hardening, preavisos, terceros) de los últimos 30 días
+        try:
+            import boletines
+            bols = boletines.obtener(30, {k: FABRICANTES[k]["nombre"] for k in seleccion})
+        except Exception as e:  # noqa: BLE001 - sin radar, la web se publica igual
+            print(f"Aviso: radar de boletines no disponible ({e})", file=sys.stderr)
+            bols = []
+        guardar_html(todos, a.html, a.dias, seleccion, a.min_cvss, a.solo_kev, dias_html, archivo, bols)
     if a.json:
         with open(a.json, "w", encoding="utf-8") as f:
             json.dump({"resultados": res, "kev_nuevos": kev_nuevos}, f, ensure_ascii=False, indent=2)
