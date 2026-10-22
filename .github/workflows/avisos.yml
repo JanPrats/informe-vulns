@@ -13,6 +13,10 @@ on:
         description: "Opcional, solo para la prueba: CVEs concretas del histórico (separadas por comas). También se publican en prueba.json para probar n8n"
         type: string
         default: ""
+      boletines:
+        description: "Con «probar»: el correo de prueba es de los 3 boletines de fabricante más recientes (en vez de CVEs)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write   # para publicar novedades.json en la rama «datos»
@@ -57,7 +61,8 @@ jobs:
           CVES_PRUEBA: ${{ inputs.cves }}
         run: |
           if [ "${{ inputs.probar }}" = "true" ]; then
-            if [ -n "$CVES_PRUEBA" ]; then python avisos.py --probar --cves "$CVES_PRUEBA" --novedades prueba.json; else python avisos.py --probar; fi
+            if [ "${{ inputs.boletines }}" = "true" ]; then python avisos.py --probar --boletines
+            elif [ -n "$CVES_PRUEBA" ]; then python avisos.py --probar --cves "$CVES_PRUEBA" --novedades prueba.json; else python avisos.py --probar; fi
           else
             python avisos.py
           fi
